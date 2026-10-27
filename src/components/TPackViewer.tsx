@@ -1117,8 +1117,11 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
               })}
             </div>
           )}
+        </div>
 
-          {/* Bouton Outil Fenêtrage (Plus gros, uniquement icône soleil) */}
+        {/* Outils regroupés à droite : Fenêtrage (Soleil), Fenêtre de base (Soleil + A), Annotations, Info Clinique (Logo seul) */}
+        <div className="flex items-center gap-2 shrink-0 ml-auto">
+          {/* Bouton Outil Fenêtrage (Soleil seul) */}
           <button
             type="button"
             onClick={() =>
@@ -1138,40 +1141,57 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
           >
             <SunMedium className="w-5 h-5" />
           </button>
-        </div>
 
-        {/* Outils à droite : Annotations + Bouton Info Clinique plus gros */}
-        <div className="flex items-center gap-1.5 shrink-0">
+          {/* Bouton Remettre la Fenêtre de base (Soleil + A) */}
+          <button
+            type="button"
+            onClick={() => {
+              setContrast(1.0);
+              setBrightness(1.0);
+              setWindowToolActive(false);
+            }}
+            className={`h-10 px-2.5 rounded-xl flex items-center justify-center gap-0.5 border transition cursor-pointer shrink-0 ${
+              contrast === 1 && brightness === 1
+                ? 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800 hover:text-cyan-300'
+                : 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/25'
+            }`}
+            title="Remettre le fenêtrage de base (Auto)"
+            aria-label="Fenêtrage de base Auto"
+          >
+            <SunMedium className="w-4 h-4 text-cyan-400" />
+            <span className="text-[11px] font-extrabold font-mono leading-none">A</span>
+          </button>
+
           <button
             type="button"
             onClick={() => setShowAnnotations((prev) => !prev)}
-            className={`px-2.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1 border transition cursor-pointer ${
+            className={`w-10 h-10 rounded-xl flex items-center justify-center border transition cursor-pointer shrink-0 ${
               showAnnotations
                 ? 'bg-cyan-500/20 border-cyan-400 text-cyan-200'
                 : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
             }`}
             title="Afficher / Masquer les annotations"
+            aria-label="Annotations"
           >
             {showAnnotations ? (
-              <Eye className="w-4 h-4 text-cyan-400" />
+              <Eye className="w-5 h-5 text-cyan-400" />
             ) : (
-              <EyeOff className="w-4 h-4 text-slate-500" />
+              <EyeOff className="w-5 h-5 text-slate-500" />
             )}
-            <span className="hidden sm:inline">Annot.</span>
           </button>
 
           <button
             type="button"
             onClick={() => setIsPedagogicalPanelOpen((prev) => !prev)}
-            className={`px-3.5 py-2 rounded-xl border text-xs sm:text-sm font-bold flex items-center gap-2 transition cursor-pointer shrink-0 ${
+            className={`w-10 h-10 rounded-xl border flex items-center justify-center transition cursor-pointer shrink-0 ${
               isPedagogicalPanelOpen
                 ? 'bg-emerald-500/25 border-emerald-400 text-emerald-200 shadow-lg shadow-emerald-500/15'
-                : 'bg-slate-900 border-slate-700 text-emerald-300 hover:bg-slate-800 hover:border-emerald-500/50 hover:text-white'
+                : 'bg-slate-900 border-slate-700 text-emerald-400 hover:bg-slate-800 hover:border-emerald-500/50 hover:text-emerald-300'
             }`}
             title="Afficher / Masquer l'information clinique et le diagnostic"
+            aria-label="Info Clinique"
           >
-            <GraduationCap className="w-5 h-5 text-emerald-400 shrink-0" />
-            <span>Info Clinique</span>
+            <GraduationCap className="w-5 h-5" />
           </button>
         </div>
       </div>
