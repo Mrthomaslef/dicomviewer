@@ -713,12 +713,12 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
 
     // Fenêtrage interactif (Contraste horizontal / Luminosité verticale) :
     // - Soit en maintenant le clic molette ((e.buttons & 4) !== 0)
-    // - Soit lorsque le bouton "Fenêtrage" (windowToolActive) est activé
+    // - Soit lorsque le bouton "Fenêtrage" (windowToolActive) est activé (clic-glisser souris ou pan 1 doigt sur téléphone)
     // - Soit en maintenant la touche W
     if (
       activeKeyMode === 'w' ||
       (e.buttons & 4) !== 0 ||
-      (windowToolActive && (e.pointerType === 'touch' || (e.buttons & 1) !== 0))
+      windowToolActive
     ) {
       setContrast((c) => Math.max(0.3, Math.min(3.0, c + dx * 0.006)));
       setBrightness((b) => Math.max(0.3, Math.min(2.5, b - dy * 0.006)));
@@ -764,6 +764,9 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
     } else if (activePointersRef.current.size === 0) {
       lastDragPosRef.current = null;
       touchScrollAccumulatorRef.current = 0;
+      if (windowToolActive) {
+        setWindowToolActive(false);
+      }
     }
     setActiveDragHandle(null);
     setCreatingMeasureId(null);
