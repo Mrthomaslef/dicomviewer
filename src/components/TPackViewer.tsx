@@ -917,7 +917,7 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
           )}
 
           {/* Boutons d'actions épurés en haut à droite */}
-          <div className="absolute top-2.5 right-12 flex items-center gap-1 z-10">
+          <div className="absolute top-2.5 right-6 sm:right-12 flex items-center gap-1 z-10">
             {currentMeasurements.length > 0 && (
               <button
                 type="button"
@@ -953,7 +953,7 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
             </button>
           </div>
 
-          {/* SCRUB BAR LATÉRALE DROITE */}
+          {/* SCRUB BAR LATÉRALE DROITE (Plus fine et compacte sur téléphone) */}
           <div
             ref={scrubTrackRef}
             onPointerDown={handleScrubPointerDown}
@@ -964,24 +964,24 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
               touchAction: 'none',
               overscrollBehavior: 'none',
             }}
-            className="w-8 sm:w-9 h-[68%] absolute right-1.5 top-1/2 -translate-y-1/2 z-20 rounded-full bg-slate-950/80 backdrop-blur border border-slate-800/90 hover:border-cyan-500/50 shadow-xl flex flex-col items-center justify-between py-2.5 cursor-ns-resize select-none"
+            className="w-4 sm:w-8 h-[50%] sm:h-[68%] absolute right-1 sm:right-1.5 top-1/2 -translate-y-1/2 z-20 rounded-full bg-slate-950/65 sm:bg-slate-950/80 backdrop-blur border border-slate-800/80 hover:border-cyan-500/50 shadow-xl flex flex-col items-center justify-between py-1.5 sm:py-2.5 cursor-ns-resize select-none"
           >
-            <div className="text-[10px] font-mono font-bold text-cyan-300 leading-none">
+            <div className="text-[8px] sm:text-[10px] font-mono font-bold text-cyan-300 leading-none">
               {sliceIndex + 1}
             </div>
 
-            <div className="relative flex-1 w-1.5 my-2 bg-slate-800/90 rounded-full">
+            <div className="relative flex-1 w-1 sm:w-1.5 my-1 sm:my-2 bg-slate-800/90 rounded-full">
               <div
                 style={{ height: `${progressRatio * 100}%` }}
                 className="w-full bg-cyan-400 rounded-full transition-none"
               />
               <div
                 style={{ top: `${progressRatio * 100}%` }}
-                className="absolute left-1/2 -translate-x-1/2 -translate-y-1/2 w-5 h-3 rounded-full bg-cyan-300 border border-slate-950 shadow"
+                className="absolute left-1/2 -translate-x-1/2 -translate-y-1/2 w-2.5 h-2 sm:w-5 sm:h-3 rounded-full bg-cyan-300 border border-slate-950 shadow"
               />
             </div>
 
-            <div className="text-[10px] font-mono text-slate-500 leading-none">
+            <div className="text-[8px] sm:text-[10px] font-mono text-slate-500 leading-none">
               {seriesManifest?.sliceCount || 1}
             </div>
           </div>
