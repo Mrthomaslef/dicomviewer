@@ -872,9 +872,14 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
                           />
                           <span className="truncate font-medium">{s.description}</span>
                         </div>
-                        <span className="text-[10px] font-mono text-cyan-300 shrink-0">
-                          {s.slices.length} c.
-                        </span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
+                            {s.anatomicalPlane}
+                          </span>
+                          <span className="text-[10px] font-mono text-cyan-300">
+                            {s.slices.length} c.
+                          </span>
+                        </div>
                       </div>
                     );
                   })}
@@ -890,7 +895,7 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
                   type="button"
                   onClick={handleReverseSliceOrder}
                   className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[11px] text-cyan-300 flex items-center gap-1 cursor-pointer"
-                  title="Inverser l'ordre de la pile (ex: Tête->Pieds <-> Pieds->Tête)"
+                  title="Inverser l'ordre de la pile (ex: Ant->Post <-> Post->Ant)"
                 >
                   <ArrowUpDown className="w-3 h-3" />
                   <span>Inverser l&apos;ordre</span>
@@ -901,10 +906,10 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
                 onChange={(e) => handleChangeSortMode(e.target.value as DicomSortMode)}
                 className="w-full px-2.5 py-1.5 rounded bg-slate-950 border border-slate-800 text-xs text-slate-100"
               >
-                <option value="pacs_auto">Auto PACS (Spatial Z + Sens InstanceNumber)</option>
-                <option value="instance_asc">Numéro d&apos;instance DICOM (0020,0013)</option>
-                <option value="spatial_desc">Position Spatiale Z (Tête → Pieds)</option>
-                <option value="spatial_asc">Position Spatiale Z (Pieds → Tête)</option>
+                <option value="pacs_auto">Auto PACS 3D (Axial Z / Coronal Y / Sagittal X + Instance)</option>
+                <option value="instance_asc">Numéro d&apos;instance DICOM strict (0020,0013)</option>
+                <option value="spatial_asc">Position Spatiale 3D croissante (Ant→Post / D→G / Pieds→Tête)</option>
+                <option value="spatial_desc">Position Spatiale 3D décroissante (Tête→Pieds / Post→Ant / G→D)</option>
                 <option value="filename_asc">Nom de fichier (Alpha-numérique)</option>
               </select>
             </div>
@@ -1253,10 +1258,10 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
               {currentSliceObj && (
                 <div className="absolute top-3 left-4 pointer-events-none text-[11px] font-mono space-y-0.5 bg-slate-950/80 border border-slate-800/80 px-3 py-2 rounded-lg">
                   <div className="text-cyan-300 font-semibold">
-                    Coupe Triée #{previewSliceIdx + 1} / {activeSeries.slices.length}
+                    Coupe #{previewSliceIdx + 1} / {activeSeries.slices.length} ({activeSeries.anatomicalPlane})
                   </div>
                   <div className="text-slate-400">
-                    Z-Proj (IPP·N): <span className="text-slate-200">{currentSliceObj.zProjection.toFixed(2)} mm</span>
+                    Axe 3D ({activeSeries.anatomicalPlane === 'CORONAL' ? 'Y Ant→Post' : activeSeries.anatomicalPlane === 'SAGITTAL' ? 'X D→G' : 'Z Inf→Sup'}): <span className="text-slate-200">{currentSliceObj.zProjection.toFixed(2)} mm</span>
                   </div>
                   <div className="text-slate-400">
                     InstanceNumber (0020,0013): <span className="text-slate-200">#{currentSliceObj.instanceNumber}</span>
