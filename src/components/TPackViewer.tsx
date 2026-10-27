@@ -392,8 +392,7 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
     if (!ctx) return;
 
     ctx.save();
-    ctx.fillStyle = '#090D16';
-    ctx.fillRect(0, 0, cw, ch);
+    ctx.clearRect(0, 0, cw, ch);
 
     const frames =
       activeSeriesData.framesByWindow[activeWindowKey] ||
@@ -407,6 +406,13 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
       ctx.save();
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(
+        offsetX,
+        offsetY,
+        seriesManifest.width * scale,
+        seriesManifest.height * scale
+      );
       ctx.drawImage(
         bitmap,
         offsetX,
@@ -825,7 +831,7 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
 
   return (
     <div
-      className="relative w-full h-full flex flex-col bg-[#090D16] text-slate-100 select-none overflow-hidden"
+      className="relative w-full h-full flex flex-col bg-black text-slate-100 select-none overflow-hidden"
       onDragOver={(e) => e.preventDefault()}
       onDrop={async (e) => {
         e.preventDefault();
@@ -851,7 +857,7 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
       />
 
       {/* CONTENEUR PRINCIPAL : ZONE D'IMAGE + VOLET PÉDAGOGIQUE PLIABLE À DROITE */}
-      <div className="relative flex-1 min-h-0 w-full flex overflow-hidden">
+      <div className="relative flex-1 min-h-0 w-full flex bg-black overflow-hidden">
         {/* ZONE D'IMAGE CENTRALE PLEIN ÉCRAN */}
         <div
           ref={viewportRef}
@@ -864,7 +870,7 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
             overscrollBehavior: 'none',
             WebkitUserSelect: 'none',
           }}
-          className={`relative flex-1 min-w-0 min-h-0 h-full overflow-hidden touch-none ${
+          className={`relative flex-1 min-w-0 min-h-0 h-full bg-black overflow-hidden touch-none ${
             rulerActive
               ? 'cursor-crosshair'
               : activeKeyMode === 'space'
