@@ -1164,24 +1164,6 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
 
           <button
             type="button"
-            onClick={() => setShowAnnotations((prev) => !prev)}
-            className={`w-10 h-10 rounded-xl flex items-center justify-center border transition cursor-pointer shrink-0 ${
-              showAnnotations
-                ? 'bg-cyan-500/20 border-cyan-400 text-cyan-200'
-                : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
-            }`}
-            title="Afficher / Masquer les annotations"
-            aria-label="Annotations"
-          >
-            {showAnnotations ? (
-              <Eye className="w-5 h-5 text-cyan-400" />
-            ) : (
-              <EyeOff className="w-5 h-5 text-slate-500" />
-            )}
-          </button>
-
-          <button
-            type="button"
             onClick={() => setIsPedagogicalPanelOpen((prev) => !prev)}
             className={`w-10 h-10 rounded-xl border flex items-center justify-center transition cursor-pointer shrink-0 ${
               isPedagogicalPanelOpen
