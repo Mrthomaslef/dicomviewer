@@ -98,9 +98,29 @@ export const App: React.FC = () => {
       if (!data || typeof data !== 'object') return;
 
       try {
+        const applyCaseMeta = (loaded: LoadedTPackArchive, meta: Record<string, unknown> | undefined) => {
+          if (!meta || typeof meta !== 'object') return;
+          if (!loaded.manifest.title && typeof meta.title === 'string') {
+            loaded.manifest.title = meta.title;
+          }
+          if (!loaded.manifest.clinicalHistory && typeof meta.clinicalHistory === 'string') {
+            loaded.manifest.clinicalHistory = meta.clinicalHistory;
+          }
+          if (!loaded.manifest.diagnosis && typeof meta.diagnosis === 'string') {
+            loaded.manifest.diagnosis = meta.diagnosis;
+          }
+          if (!loaded.manifest.anatomicalRegion && typeof meta.anatomicalRegion === 'string') {
+            loaded.manifest.anatomicalRegion = meta.anatomicalRegion;
+          }
+          if (typeof loaded.manifest.keySliceIndex !== 'number' && typeof meta.keySliceIndex === 'number') {
+            loaded.manifest.keySliceIndex = meta.keySliceIndex;
+          }
+        };
+
         if (data.type === 'TPACK_LOAD_BUFFER' && data.buffer) {
           setIsLoading(true);
           const loaded = await loadTPackFromBuffer(data.buffer, true);
+          applyCaseMeta(loaded, data.caseMeta);
           handleLoadNewArchive(loaded);
           setIsLoading(false);
         } else if (data.type === 'TPACK_LOAD_URL' && typeof data.url === 'string') {
@@ -109,6 +129,7 @@ export const App: React.FC = () => {
           if (!res.ok) throw new Error(`Fichier introuvable : ${data.url}`);
           const buf = await res.arrayBuffer();
           const loaded = await loadTPackFromBuffer(buf, true);
+          applyCaseMeta(loaded, data.caseMeta);
           handleLoadNewArchive(loaded);
           setIsLoading(false);
         }

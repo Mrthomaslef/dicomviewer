@@ -1,16 +1,13 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
-  Ruler,
   Eye,
   EyeOff,
   RotateCcw,
-  Layers,
   FolderUp,
   SunMedium,
   Trash2,
   Crosshair,
   PanelRightClose,
-  PanelRightOpen,
   GraduationCap,
 } from 'lucide-react';
 import { LoadedTPackArchive, loadTPackFromFile } from '../core/tpackLoader';
@@ -56,8 +53,7 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
   const [rulerActive, setRulerActive] = useState<boolean>(false);
   const [windowToolActive, setWindowToolActive] = useState<boolean>(false);
   const [showAnnotations, setShowAnnotations] = useState<boolean>(false);
-  const isEmbedded = typeof window !== 'undefined' && window.parent !== window;
-  const [isPedagogicalPanelOpen, setIsPedagogicalPanelOpen] = useState<boolean>(!isEmbedded);
+  const [isPedagogicalPanelOpen, setIsPedagogicalPanelOpen] = useState<boolean>(false);
   const [showDiagnosis, setShowDiagnosis] = useState<boolean>(false);
 
   // Recense toutes les coupes annotées du cas pour accès rapide en 1 clic
@@ -138,6 +134,7 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
       setMeasurementsBySlice({});
       setShowDiagnosis(false);
       setShowAnnotations(false);
+      setIsPedagogicalPanelOpen(false);
     }
   }, [archive]);
 
@@ -278,12 +275,6 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
         setActiveKeyMode('space');
       } else if (key === 'z') {
         setActiveKeyMode('z');
-      } else if (key === 'm') {
-        setRulerActive((prev) => {
-          const next = !prev;
-          if (next) setWindowToolActive(false);
-          return next;
-        });
       } else if (key === 'f') {
         setWindowToolActive((prev) => {
           const next = !prev;
@@ -915,26 +906,6 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
             >
               <RotateCcw className="w-3.5 h-3.5" />
             </button>
-
-            {!isEmbedded && (
-              <button
-                type="button"
-                onClick={() => setIsPedagogicalPanelOpen((prev) => !prev)}
-                className={`px-2 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1 transition cursor-pointer ${
-                  isPedagogicalPanelOpen
-                    ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300'
-                    : 'bg-slate-900/85 border-slate-700/80 text-slate-300 hover:text-white'
-                }`}
-                title="Afficher / Masquer le volet pédagogique"
-              >
-                {isPedagogicalPanelOpen ? (
-                  <PanelRightClose className="w-3.5 h-3.5" />
-                ) : (
-                  <PanelRightOpen className="w-3.5 h-3.5" />
-                )}
-                <span className="hidden sm:inline">Cas</span>
-              </button>
-            )}
           </div>
 
           {/* SCRUB BAR LATÉRALE DROITE */}
@@ -1090,23 +1061,29 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
       </div>
 
       {/* BARRE INFÉRIEURE UNIQUE & ÉPURÉE */}
-      <div className="w-full bg-[#0B101B] border-t border-slate-800/90 px-2.5 py-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] flex items-center justify-between gap-1.5 z-20 shrink-0 overflow-x-auto">
+      <div className="w-full bg-[#0B101B] border-t border-slate-800/90 px-2.5 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] flex items-center justify-between gap-2 z-20 shrink-0 overflow-x-auto">
         <div className="flex items-center gap-1.5 min-w-0">
-          {/* Sélecteur de Série */}
-          {seriesList.length > 1 && (
-            <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 min-w-0">
-              <Layers className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-              <select
-                value={activeSeriesId}
-                onChange={(e) => handleSelectSeries(e.target.value)}
-                className="bg-transparent text-xs font-medium text-slate-100 focus:outline-none max-w-[115px] sm:max-w-[180px] truncate"
-              >
-                {seriesList.map((s) => (
-                  <option key={s.id} value={s.id} className="bg-slate-950 text-slate-100">
+          {/* Séquences sous forme de boutons cliquables */}
+          {seriesList.length > 0 && (
+            <div className="flex items-center gap-1 overflow-x-auto">
+              {seriesList.map((s) => {
+                const isActive = activeSeriesId === s.id;
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => handleSelectSeries(s.id)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition cursor-pointer shrink-0 max-w-[160px] truncate ${
+                      isActive
+                        ? 'bg-cyan-500 text-slate-950 border-cyan-400 shadow-sm'
+                        : 'bg-slate-900 border-slate-800 text-slate-300 hover:text-white hover:border-slate-700'
+                    }`}
+                    title={`${s.description} (${s.sliceCount} coupes)`}
+                  >
                     {s.description}
-                  </option>
-                ))}
-              </select>
+                  </button>
+                );
+              })}
             </div>
           )}
 
@@ -1139,7 +1116,7 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
             </div>
           )}
 
-          {/* Bouton Outil Fenêtrage (Contraste / Luminosité au clic gauche, tactile ou clic molette direct) */}
+          {/* Bouton Outil Fenêtrage (Plus gros, uniquement icône soleil) */}
           <button
             type="button"
             onClick={() =>
@@ -1149,68 +1126,50 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
                 return next;
               })
             }
-            className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 border transition cursor-pointer shrink-0 ${
+            className={`w-10 h-10 rounded-xl flex items-center justify-center border transition cursor-pointer shrink-0 ${
               windowToolActive
-                ? 'bg-cyan-500/20 border-cyan-400 text-cyan-200'
-                : 'bg-slate-900 border-slate-800 text-slate-300 hover:text-white'
+                ? 'bg-cyan-500/25 border-cyan-400 text-cyan-200 shadow-lg shadow-cyan-500/15'
+                : 'bg-slate-900 border-slate-800 text-cyan-400 hover:bg-slate-800 hover:text-cyan-300'
             }`}
-            title="Activer l'outil Fenêtrage (ou maintenez directement le clic molette sur l'image)"
+            title="Activer le Fenêtrage (ou clic molette maintenu sur l'image)"
+            aria-label="Fenêtrage"
           >
-            <SunMedium className="w-3.5 h-3.5 text-cyan-400" />
-            <span>Fenêtrage</span>
+            <SunMedium className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Outils : Règle, Annotations, Pédagogie */}
-        <div className="flex items-center gap-1 shrink-0">
-          <button
-            type="button"
-            onClick={() =>
-              setRulerActive((prev) => {
-                const next = !prev;
-                if (next) setWindowToolActive(false);
-                return next;
-              })
-            }
-            className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 border transition cursor-pointer ${
-              rulerActive
-                ? 'bg-amber-500/20 border-amber-400 text-amber-200'
-                : 'bg-slate-900 border-slate-800 text-slate-300 hover:text-white'
-            }`}
-          >
-            <Ruler className="w-3.5 h-3.5 text-amber-400" />
-            <span>Règle</span>
-          </button>
-
+        {/* Outils à droite : Annotations + Bouton Info Clinique plus gros */}
+        <div className="flex items-center gap-1.5 shrink-0">
           <button
             type="button"
             onClick={() => setShowAnnotations((prev) => !prev)}
-            className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 border transition cursor-pointer ${
+            className={`px-2.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1 border transition cursor-pointer ${
               showAnnotations
                 ? 'bg-cyan-500/20 border-cyan-400 text-cyan-200'
                 : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
             }`}
+            title="Afficher / Masquer les annotations"
           >
             {showAnnotations ? (
-              <Eye className="w-3.5 h-3.5 text-cyan-400" />
+              <Eye className="w-4 h-4 text-cyan-400" />
             ) : (
-              <EyeOff className="w-3.5 h-3.5 text-slate-500" />
+              <EyeOff className="w-4 h-4 text-slate-500" />
             )}
-            <span className="hidden xs:inline">Annot.</span>
+            <span className="hidden sm:inline">Annot.</span>
           </button>
 
           <button
             type="button"
             onClick={() => setIsPedagogicalPanelOpen((prev) => !prev)}
-            className={`px-2.5 py-1 rounded-lg border text-xs font-semibold flex items-center gap-1 transition cursor-pointer ${
+            className={`px-3.5 py-2 rounded-xl border text-xs sm:text-sm font-bold flex items-center gap-2 transition cursor-pointer shrink-0 ${
               isPedagogicalPanelOpen
-                ? 'bg-emerald-500/20 border-emerald-400 text-emerald-200'
-                : 'bg-slate-900 border-slate-800 text-slate-300 hover:text-white'
+                ? 'bg-emerald-500/25 border-emerald-400 text-emerald-200 shadow-lg shadow-emerald-500/15'
+                : 'bg-slate-900 border-slate-700 text-emerald-300 hover:bg-slate-800 hover:border-emerald-500/50 hover:text-white'
             }`}
-            title="Ouvrir / Fermer le volet pédagogique (Clinique & Diagnostic)"
+            title="Afficher / Masquer l'information clinique et le diagnostic"
           >
-            <GraduationCap className="w-3.5 h-3.5 text-emerald-400" />
-            <span className="hidden xs:inline">Pédagogie</span>
+            <GraduationCap className="w-5 h-5 text-emerald-400 shrink-0" />
+            <span>Info Clinique</span>
           </button>
         </div>
       </div>
