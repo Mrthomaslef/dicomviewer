@@ -399,6 +399,9 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
     ctx.fillStyle = '#22D3EE';
     ctx.lineWidth = 2.2;
 
+    let labelAnchorX = x1;
+    let labelAnchorY = y1;
+
     if (ann.type === 'arrow') {
       ctx.beginPath();
       ctx.moveTo(x1, y1);
@@ -420,17 +423,24 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
       ctx.closePath();
       ctx.fill();
     } else if (ann.type === 'circle') {
-      const r = Math.hypot(x2 - x1, y2 - y1);
+      // Le point de départ (x1, y1) est sur le côté (circonférence) du cercle, et (x2, y2) est le point opposé
+      const cx = (x1 + x2) / 2;
+      const cy = (y1 + y2) / 2;
+      const r = Math.hypot(x2 - x1, y2 - y1) / 2;
       ctx.beginPath();
-      ctx.arc(x1, y1, r, 0, Math.PI * 2);
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
       ctx.stroke();
+
+      // Place le texte à l'extérieur du cercle (au-dessus du bord supérieur, ou en dessous si trop près du haut)
+      labelAnchorX = cx;
+      labelAnchorY = cy - r - 6 >= 20 ? cy - r : cy + r + 22;
     }
 
     if (ann.label) {
       ctx.font = '600 11px Inter, system-ui, sans-serif';
       const textWidth = ctx.measureText(ann.label).width;
-      const lx = Math.max(6, Math.min(width - textWidth - 14, x1 - textWidth / 2));
-      const ly = Math.max(18, y1 - 10);
+      const lx = Math.max(6, Math.min(width - textWidth - 14, labelAnchorX - textWidth / 2));
+      const ly = Math.max(18, Math.min(height - 6, labelAnchorY - 10));
       ctx.fillStyle = 'rgba(9, 13, 22, 0.88)';
       ctx.fillRect(lx - 4, ly - 12, textWidth + 8, 16);
       ctx.strokeStyle = 'rgba(34, 211, 238, 0.5)';

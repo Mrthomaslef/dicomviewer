@@ -1220,6 +1220,9 @@ function drawViewerAnnotation(
   ctx.lineWidth = 2.2 * dpr;
 
   const [x1, y1] = toScreen(ann.points[0]);
+  let labelAnchorX = x1;
+  let labelAnchorY = y1;
+  let circleRadius = 0;
 
   if (ann.type === 'arrow' && ann.points.length >= 2) {
     const [x2, y2] = toScreen(ann.points[1]);
@@ -1244,12 +1247,18 @@ function drawViewerAnnotation(
     ctx.fill();
   } else if (ann.type === 'circle' && ann.points.length >= 2) {
     const [x2, y2] = toScreen(ann.points[1]);
-    const radius = Math.hypot(x2 - x1, y2 - y1);
+    // Le point de début (x1, y1) est sur le côté du cercle, et (x2, y2) est le bord opposé
+    const cx = (x1 + x2) / 2;
+    const cy = (y1 + y2) / 2;
+    circleRadius = Math.hypot(x2 - x1, y2 - y1) / 2;
     ctx.setLineDash([6 * dpr, 4 * dpr]);
     ctx.beginPath();
-    ctx.arc(x1, y1, radius, 0, Math.PI * 2);
+    ctx.arc(cx, cy, circleRadius, 0, Math.PI * 2);
     ctx.stroke();
     ctx.setLineDash([]);
+
+    labelAnchorX = cx;
+    labelAnchorY = cy - circleRadius;
   }
 
   if (ann.label) {
@@ -1258,8 +1267,16 @@ function drawViewerAnnotation(
     const padX = 6 * dpr;
     const boxH = 19 * dpr;
     const boxW = metrics.width + padX * 2;
-    const bx = Math.max(4 * dpr, Math.min(ctx.canvas.width - boxW - 4 * dpr, x1 - boxW / 2));
-    const by = Math.max(4 * dpr, y1 - boxH - 6 * dpr);
+    const bx = Math.max(
+      4 * dpr,
+      Math.min(ctx.canvas.width - boxW - 4 * dpr, labelAnchorX - boxW / 2)
+    );
+    let by = labelAnchorY - boxH - 6 * dpr;
+    if (ann.type === 'circle' && by < 4 * dpr) {
+      by = Math.min(ctx.canvas.height - boxH - 4 * dpr, labelAnchorY + circleRadius * 2 + 6 * dpr);
+    } else {
+      by = Math.max(4 * dpr, by);
+    }
 
     ctx.fillStyle = 'rgba(9, 13, 22, 0.9)';
     ctx.fillRect(bx, by, boxW, boxH);
