@@ -11,7 +11,6 @@ import {
   Play,
   Layers,
   Trash2,
-  Sparkles,
   CheckCircle2,
   Sliders,
   Info,
@@ -35,7 +34,6 @@ import {
   estimateTPackSizeBytes,
   StudioSeriesBuildOptions,
 } from '../core/tpackBuilder';
-import { generateSyntheticDicomFiles } from '../core/demoCaseGenerator';
 import { LoadedTPackArchive, loadTPackFromBuffer } from '../core/tpackLoader';
 import { saveCaseToIndexedDB, StoredPedagogicalCase } from '../core/caseLibraryDb';
 
@@ -162,24 +160,6 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
       if (series.length > 0) {
         setParsedSeriesList(series);
         initSeriesOptions(series);
-      }
-    } finally {
-      setIsParsing(false);
-    }
-  };
-
-  const handleLoadSyntheticDicomFolder = async () => {
-    setIsParsing(true);
-    const synthFiles = generateSyntheticDicomFiles(32);
-    setParseProgress({ current: 0, total: synthFiles.length });
-    try {
-      const series = await parseDicomFiles(synthFiles, (cur, tot) => {
-        setParseProgress({ current: cur, total: tot });
-      });
-      if (series.length > 0) {
-        setParsedSeriesList(series);
-        initSeriesOptions(series);
-        setCaseTitle('TDM Fantôme 16-bit (avec Bandeau PHI à anonymiser)');
       }
     } finally {
       setIsParsing(false);
@@ -739,14 +719,6 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
               Fichiers .dcm
             </button>
           </div>
-          <button
-            type="button"
-            onClick={handleLoadSyntheticDicomFolder}
-            className="w-full py-1.5 px-3 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-xs font-medium flex items-center justify-center gap-1.5 transition"
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-            Générer 32 coupes DICOM 16-bit de test (avec PHI)
-          </button>
         </div>
 
         {isParsing && (
@@ -1120,17 +1092,15 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
               Studio d&apos;Import &amp; Compression DICOM → <code className="text-cyan-400">.tpack</code>
             </h2>
             <p className="text-sm text-slate-400 max-w-md mt-1">
-              Glissez un dossier de fichiers <code className="text-slate-200">.dcm</code> à gauche ou
-              générez un lot de 32 coupes DICOM 16 bits signées pour tester le tri géométrique, le
-              masquage Burned-in PHI et l&apos;encodage WebP 8 bits.
+              Sélectionnez ou glissez un dossier contenant vos coupes <code className="text-slate-200">.dcm</code> pour organiser les séries, anonymiser le Burned-in PHI et générer votre fichier <code className="text-cyan-400">.tpack</code>.
             </p>
             <button
               type="button"
-              onClick={handleLoadSyntheticDicomFolder}
+              onClick={() => folderInputRef.current?.click()}
               className="mt-5 px-4 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold text-xs flex items-center gap-2 shadow-lg shadow-cyan-500/20 transition cursor-pointer"
             >
-              <Sparkles className="w-4 h-4" />
-              Charger le lot DICOM 16-bit de démonstration (32 coupes .dcm)
+              <FolderOpen className="w-4 h-4" />
+              Importer un dossier DICOM
             </button>
           </div>
         ) : (
