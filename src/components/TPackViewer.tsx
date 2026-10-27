@@ -120,6 +120,7 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
   const lastPinchMidRef = useRef<{ x: number; y: number } | null>(null);
   const lastDragPosRef = useRef<{ x: number; y: number } | null>(null);
   const isScrubbingRef = useRef<boolean>(false);
+  const hasWindowDraggedRef = useRef<boolean>(false);
 
   useEffect(() => {
     const firstSeries = archive.manifest.series[0];
@@ -409,11 +410,6 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
       ctx.save();
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
-      if (contrast !== 1.0 || brightness !== 1.0) {
-        ctx.filter = `brightness(${Math.round(brightness * 100)}%) contrast(${Math.round(
-          contrast * 100
-        )}%)`;
-      }
       ctx.drawImage(
         bitmap,
         offsetX,
@@ -553,7 +549,12 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
       }
     };
 
+    const preventTouchScroll = (e: TouchEvent) => {
+      e.preventDefault();
+    };
+
     viewport.addEventListener('wheel', handleNativeWheel, { passive: false });
+    viewport.addEventListener('touchmove', preventTouchScroll, { passive: false });
     viewport.addEventListener('gesturestart', handleGestureStart, { passive: false });
     viewport.addEventListener('gesturechange', handleGestureChange, { passive: false });
     viewport.addEventListener('gestureend', handleGestureEnd, { passive: false });
@@ -561,6 +562,7 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
 
     return () => {
       viewport.removeEventListener('wheel', handleNativeWheel);
+      viewport.removeEventListener('touchmove', preventTouchScroll);
       viewport.removeEventListener('gesturestart', handleGestureStart);
       viewport.removeEventListener('gesturechange', handleGestureChange);
       viewport.removeEventListener('gestureend', handleGestureEnd);
@@ -574,8 +576,13 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
     if (e.button === 1) {
       e.preventDefault();
     }
-    e.currentTarget.setPointerCapture(e.pointerId);
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // Certaines implémentations mobiles n'acceptent pas setPointerCapture sur touch
+    }
     activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    hasWindowDraggedRef.current = false;
 
     if (activePointersRef.current.size === 2) {
       if (creatingMeasureId) {
@@ -711,6 +718,9 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
       (e.buttons & 4) !== 0 ||
       windowToolActive
     ) {
+      if (Math.abs(dx) > 0 || Math.abs(dy) > 0) {
+        hasWindowDraggedRef.current = true;
+      }
       setContrast((c) => Math.max(0.3, Math.min(3.0, c + dx * 0.006)));
       setBrightness((b) => Math.max(0.3, Math.min(2.5, b - dy * 0.006)));
       return;
@@ -761,9 +771,24 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
     } else if (activePointersRef.current.size === 0) {
       lastDragPosRef.current = null;
       touchScrollAccumulatorRef.current = 0;
-      if (windowToolActive) {
+      if (windowToolActive && hasWindowDraggedRef.current) {
         setWindowToolActive(false);
+        hasWindowDraggedRef.current = false;
       }
+    }
+    setActiveDragHandle(null);
+    setCreatingMeasureId(null);
+  };
+
+  const handleViewportPointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
+    activePointersRef.current.delete(e.pointerId);
+    if (activePointersRef.current.size < 2) {
+      lastPinchDistRef.current = null;
+      lastPinchMidRef.current = null;
+    }
+    if (activePointersRef.current.size === 0) {
+      lastDragPosRef.current = null;
+      touchScrollAccumulatorRef.current = 0;
     }
     setActiveDragHandle(null);
     setCreatingMeasureId(null);
@@ -836,7 +861,12 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
           onPointerDown={handleViewportPointerDown}
           onPointerMove={handleViewportPointerMove}
           onPointerUp={handleViewportPointerUp}
-          onPointerCancel={handleViewportPointerUp}
+          onPointerCancel={handleViewportPointerCancel}
+          style={{
+            touchAction: 'none',
+            overscrollBehavior: 'none',
+            WebkitUserSelect: 'none',
+          }}
           className={`relative flex-1 min-w-0 min-h-0 h-full overflow-hidden touch-none ${
             rulerActive
               ? 'cursor-crosshair'
@@ -849,7 +879,22 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
               : 'cursor-grab active:cursor-grabbing'
           }`}
         >
-          <canvas ref={canvasRef} className="w-full h-full block" />
+          <canvas
+            ref={canvasRef}
+            style={
+              contrast !== 1.0 || brightness !== 1.0
+                ? {
+                    filter: `brightness(${Math.round(brightness * 100)}%) contrast(${Math.round(
+                      contrast * 100
+                    )}%)`,
+                    WebkitFilter: `brightness(${Math.round(
+                      brightness * 100
+                    )}%) contrast(${Math.round(contrast * 100)}%)`,
+                  }
+                : undefined
+            }
+            className="w-full h-full block"
+          />
 
           {/* HUD Ultra-Compact en haut à gauche */}
           {seriesManifest && (
