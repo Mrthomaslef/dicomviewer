@@ -730,7 +730,12 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
       return;
     }
 
-    if (activeKeyMode === 'space' || (e.buttons & 2) !== 0) {
+    // Sur ordinateur (souris) : clic gauche maintenu (ou clic droit / Espace) = Pan (déplacement de l'image)
+    if (
+      activeKeyMode === 'space' ||
+      (e.buttons & 2) !== 0 ||
+      (!rulerActive && !windowToolActive && e.pointerType === 'mouse' && (e.buttons & 1) !== 0)
+    ) {
       setPan((p) => ({
         x: p.x + dx * dpr,
         y: p.y + dy * dpr,
@@ -738,7 +743,8 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
       return;
     }
 
-    if (!rulerActive && !windowToolActive && (e.pointerType === 'touch' || e.buttons === 1)) {
+    // Sur tactile (téléphone / tablette) : 1 doigt fait défiler les coupes
+    if (!rulerActive && !windowToolActive && e.pointerType === 'touch') {
       const SLICE_SCROLL_STEP_PX = 11;
       touchScrollAccumulatorRef.current += dy;
       if (Math.abs(touchScrollAccumulatorRef.current) >= SLICE_SCROLL_STEP_PX) {
@@ -849,7 +855,7 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
               ? 'cursor-move'
               : activeKeyMode === 'z'
               ? 'cursor-zoom-in'
-              : 'cursor-ns-resize'
+              : 'cursor-grab active:cursor-grabbing'
           }`}
         >
           <canvas ref={canvasRef} className="w-full h-full block" />
