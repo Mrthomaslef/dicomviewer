@@ -5,11 +5,13 @@ import {
   EyeOff,
   RotateCcw,
   Layers,
-  Info,
   FolderUp,
   SunMedium,
   Trash2,
-  X,
+  Crosshair,
+  PanelRightClose,
+  PanelRightOpen,
+  GraduationCap,
 } from 'lucide-react';
 import { LoadedTPackArchive, loadTPackFromFile } from '../core/tpackLoader';
 import { AnnotationItem } from '../types/manifest';
@@ -52,8 +54,48 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
   const [brightness, setBrightness] = useState<number>(1.0);
 
   const [rulerActive, setRulerActive] = useState<boolean>(false);
-  const [showAnnotations, setShowAnnotations] = useState<boolean>(true);
-  const [showCaseInfo, setShowCaseInfo] = useState<boolean>(false);
+  const [showAnnotations, setShowAnnotations] = useState<boolean>(false);
+  const isEmbedded = typeof window !== 'undefined' && window.parent !== window;
+  const [isPedagogicalPanelOpen, setIsPedagogicalPanelOpen] = useState<boolean>(!isEmbedded);
+  const [showDiagnosis, setShowDiagnosis] = useState<boolean>(false);
+
+  // Recense toutes les coupes annotées du cas pour accès rapide en 1 clic
+  const annotatedSlicesList = useMemo(() => {
+    const list: Array<{ seriesId: string; seriesDesc: string; sliceIndex: number; label: string }> = [];
+    for (const s of archive.manifest.series) {
+      for (const sl of s.slices) {
+        if (sl.annotations && sl.annotations.length > 0) {
+          for (const ann of sl.annotations) {
+            list.push({
+              seriesId: s.id,
+              seriesDesc: s.description,
+              sliceIndex: sl.index,
+              label: ann.label || 'Annotation clé',
+            });
+          }
+        }
+      }
+    }
+    return list;
+  }, [archive]);
+
+  const effectiveKeySliceIndex = useMemo(() => {
+    if (typeof archive.manifest.keySliceIndex === 'number') {
+      return archive.manifest.keySliceIndex;
+    }
+    if (annotatedSlicesList.length > 0) {
+      return annotatedSlicesList[0].sliceIndex;
+    }
+    const firstCount = archive.manifest.series[0]?.sliceCount || 1;
+    return Math.floor(firstCount / 2);
+  }, [archive, annotatedSlicesList]);
+
+  const effectiveKeySeriesId = useMemo(() => {
+    if (annotatedSlicesList.length > 0) {
+      return annotatedSlicesList[0].seriesId;
+    }
+    return archive.manifest.series[0]?.id || '';
+  }, [archive, annotatedSlicesList]);
 
   const [measurementsBySlice, setMeasurementsBySlice] = useState<
     Record<string, MeasurementLine[]>
@@ -93,8 +135,35 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
       setContrast(1);
       setBrightness(1);
       setMeasurementsBySlice({});
+      setShowDiagnosis(false);
+      setShowAnnotations(false);
     }
   }, [archive]);
+
+  const handleJumpToKeySlice = useCallback(
+    (revealAnnotations: boolean = true) => {
+      const targetSeriesId = effectiveKeySeriesId || activeSeriesId;
+      if (targetSeriesId && archive.seriesMap[targetSeriesId]) {
+        setActiveSeriesId(targetSeriesId);
+        const targetManifest = archive.seriesMap[targetSeriesId].manifest;
+        if (
+          archive.manifest.keyWindowKey &&
+          targetManifest.availableWindows.some((w) => w.key === archive.manifest.keyWindowKey)
+        ) {
+          setActiveWindowKey(archive.manifest.keyWindowKey);
+        }
+        const safeSlice = Math.max(
+          0,
+          Math.min(targetManifest.sliceCount - 1, effectiveKeySliceIndex)
+        );
+        setSliceIndex(safeSlice);
+      }
+      if (revealAnnotations) {
+        setShowAnnotations(true);
+      }
+    },
+    [archive, effectiveKeySeriesId, effectiveKeySliceIndex, activeSeriesId]
+  );
 
   // Pont API postMessage bidirectionnel
   useEffect(() => {
@@ -746,144 +815,247 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
         }}
       />
 
-      {/* ZONE D'IMAGE CENTRALE PLEIN ÉCRAN */}
-      <div
-        ref={viewportRef}
-        onPointerDown={handleViewportPointerDown}
-        onPointerMove={handleViewportPointerMove}
-        onPointerUp={handleViewportPointerUp}
-        onPointerCancel={handleViewportPointerUp}
-        className={`relative flex-1 min-h-0 w-full overflow-hidden touch-none ${
-          rulerActive
-            ? 'cursor-crosshair'
-            : activeKeyMode === 'space'
-            ? 'cursor-grabbing'
-            : activeKeyMode === 'w'
-            ? 'cursor-ns-resize'
-            : activeKeyMode === 'z'
-            ? 'cursor-zoom-in'
-            : 'cursor-ns-resize'
-        }`}
-      >
-        <canvas ref={canvasRef} className="w-full h-full block" />
+      {/* CONTENEUR PRINCIPAL : ZONE D'IMAGE + VOLET PÉDAGOGIQUE PLIABLE À DROITE */}
+      <div className="relative flex-1 min-h-0 w-full flex overflow-hidden">
+        {/* ZONE D'IMAGE CENTRALE PLEIN ÉCRAN */}
+        <div
+          ref={viewportRef}
+          onPointerDown={handleViewportPointerDown}
+          onPointerMove={handleViewportPointerMove}
+          onPointerUp={handleViewportPointerUp}
+          onPointerCancel={handleViewportPointerUp}
+          className={`relative flex-1 min-w-0 min-h-0 h-full overflow-hidden touch-none ${
+            rulerActive
+              ? 'cursor-crosshair'
+              : activeKeyMode === 'space'
+              ? 'cursor-grabbing'
+              : activeKeyMode === 'w'
+              ? 'cursor-ns-resize'
+              : activeKeyMode === 'z'
+              ? 'cursor-zoom-in'
+              : 'cursor-ns-resize'
+          }`}
+        >
+          <canvas ref={canvasRef} className="w-full h-full block" />
 
-        {/* HUD Ultra-Compact en haut à gauche */}
-        {seriesManifest && (
-          <div className="absolute top-2.5 left-2.5 pointer-events-none flex items-center gap-2 bg-slate-950/75 backdrop-blur border border-slate-800/80 rounded-lg px-2.5 py-1 text-xs font-mono shadow">
-            <span className="px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-bold text-[10px]">
-              {seriesManifest.modality}
-            </span>
-            <span className="text-white font-semibold">
-              {sliceIndex + 1} / {seriesManifest.sliceCount}
-            </span>
-            {zoom !== 1 && (
-              <span className="text-[11px] text-amber-300">{zoom.toFixed(1)}×</span>
-            )}
-          </div>
-        )}
-
-        {/* Boutons d'actions épurés en haut à droite */}
-        <div className="absolute top-2.5 right-12 flex items-center gap-1 z-10">
-          {currentMeasurements.length > 0 && (
-            <button
-              type="button"
-              onClick={() =>
-                setMeasurementsBySlice((prev) => ({
-                  ...prev,
-                  [currentSliceKey]: [],
-                }))
-              }
-              className="p-1.5 rounded-lg bg-red-950/85 hover:bg-red-900 border border-red-500/40 text-red-200 transition cursor-pointer"
-              title="Effacer les mesures"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
+          {/* HUD Ultra-Compact en haut à gauche */}
+          {seriesManifest && (
+            <div className="absolute top-2.5 left-2.5 pointer-events-none flex items-center gap-2 bg-slate-950/75 backdrop-blur border border-slate-800/80 rounded-lg px-2.5 py-1 text-xs font-mono shadow">
+              <span className="px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-bold text-[10px]">
+                {seriesManifest.modality}
+              </span>
+              <span className="text-white font-semibold">
+                {sliceIndex + 1} / {seriesManifest.sliceCount}
+              </span>
+              {zoom !== 1 && (
+                <span className="text-[11px] text-amber-300">{zoom.toFixed(1)}×</span>
+              )}
+            </div>
           )}
 
-          <button
-            type="button"
-            onClick={() => tpackInputRef.current?.click()}
-            className="p-1.5 rounded-lg bg-slate-900/85 hover:bg-slate-800 border border-slate-700/80 text-slate-300 hover:text-cyan-300 transition cursor-pointer"
-            title="Ouvrir un fichier .tpack"
-          >
-            <FolderUp className="w-3.5 h-3.5" />
-          </button>
-
-          <button
-            type="button"
-            onClick={resetView}
-            className="p-1.5 rounded-lg bg-slate-900/85 hover:bg-slate-800 border border-slate-700/80 text-slate-300 hover:text-white transition cursor-pointer"
-            title="Réinitialiser la vue (R)"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-          </button>
-        </div>
-
-        {/* SCRUB BAR LATÉRALE DROITE */}
-        <div
-          ref={scrubTrackRef}
-          onPointerDown={handleScrubPointerDown}
-          onPointerMove={handleScrubPointerMove}
-          onPointerUp={handleScrubPointerUp}
-          onPointerCancel={handleScrubPointerUp}
-          style={{
-            touchAction: 'none',
-            overscrollBehavior: 'none',
-          }}
-          className="w-8 sm:w-9 h-[68%] absolute right-1.5 top-1/2 -translate-y-1/2 z-20 rounded-full bg-slate-950/80 backdrop-blur border border-slate-800/90 hover:border-cyan-500/50 shadow-xl flex flex-col items-center justify-between py-2.5 cursor-ns-resize select-none"
-        >
-          <div className="text-[10px] font-mono font-bold text-cyan-300 leading-none">
-            {sliceIndex + 1}
-          </div>
-
-          <div className="relative flex-1 w-1.5 my-2 bg-slate-800/90 rounded-full">
-            <div
-              style={{ height: `${progressRatio * 100}%` }}
-              className="w-full bg-cyan-400 rounded-full transition-none"
-            />
-            <div
-              style={{ top: `${progressRatio * 100}%` }}
-              className="absolute left-1/2 -translate-x-1/2 -translate-y-1/2 w-5 h-3 rounded-full bg-cyan-300 border border-slate-950 shadow"
-            />
-          </div>
-
-          <div className="text-[10px] font-mono text-slate-500 leading-none">
-            {seriesManifest?.sliceCount || 1}
-          </div>
-        </div>
-
-        {/* Popover Infos Cas & Diagnostic lus depuis le .tpack */}
-        {showCaseInfo && (
-          <div className="absolute bottom-3 left-3 right-12 sm:right-auto sm:w-80 z-30 rounded-xl bg-slate-950/95 backdrop-blur border border-slate-800 p-3 shadow-2xl space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-cyan-300 truncate">
-                {archive.manifest.title}
-              </span>
+          {/* Boutons d'actions épurés en haut à droite */}
+          <div className="absolute top-2.5 right-12 flex items-center gap-1 z-10">
+            {currentMeasurements.length > 0 && (
               <button
                 type="button"
-                onClick={() => setShowCaseInfo(false)}
-                className="p-0.5 text-slate-400 hover:text-white"
+                onClick={() =>
+                  setMeasurementsBySlice((prev) => ({
+                    ...prev,
+                    [currentSliceKey]: [],
+                  }))
+                }
+                className="p-1.5 rounded-lg bg-red-950/85 hover:bg-red-900 border border-red-500/40 text-red-200 transition cursor-pointer"
+                title="Effacer les mesures"
               >
-                <X className="w-3.5 h-3.5" />
+                <Trash2 className="w-3.5 h-3.5" />
               </button>
-            </div>
-            {archive.manifest.clinicalHistory && (
-              <div className="space-y-0.5">
-                <div className="text-[10px] font-bold uppercase text-slate-400">Clinique</div>
-                <p className="text-xs text-slate-200 leading-snug">
-                  {archive.manifest.clinicalHistory}
-                </p>
-              </div>
             )}
-            {archive.manifest.diagnosis && (
-              <div className="space-y-0.5 pt-1 border-t border-slate-800">
-                <div className="text-[10px] font-bold uppercase text-emerald-400">Diagnostic</div>
-                <p className="text-xs text-emerald-200 leading-snug">
-                  {archive.manifest.diagnosis}
-                </p>
-              </div>
+
+            <button
+              type="button"
+              onClick={() => tpackInputRef.current?.click()}
+              className="p-1.5 rounded-lg bg-slate-900/85 hover:bg-slate-800 border border-slate-700/80 text-slate-300 hover:text-cyan-300 transition cursor-pointer"
+              title="Ouvrir un fichier .tpack"
+            >
+              <FolderUp className="w-3.5 h-3.5" />
+            </button>
+
+            <button
+              type="button"
+              onClick={resetView}
+              className="p-1.5 rounded-lg bg-slate-900/85 hover:bg-slate-800 border border-slate-700/80 text-slate-300 hover:text-white transition cursor-pointer"
+              title="Réinitialiser la vue (R)"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
+
+            {!isEmbedded && (
+              <button
+                type="button"
+                onClick={() => setIsPedagogicalPanelOpen((prev) => !prev)}
+                className={`px-2 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1 transition cursor-pointer ${
+                  isPedagogicalPanelOpen
+                    ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300'
+                    : 'bg-slate-900/85 border-slate-700/80 text-slate-300 hover:text-white'
+                }`}
+                title="Afficher / Masquer le volet pédagogique"
+              >
+                {isPedagogicalPanelOpen ? (
+                  <PanelRightClose className="w-3.5 h-3.5" />
+                ) : (
+                  <PanelRightOpen className="w-3.5 h-3.5" />
+                )}
+                <span className="hidden sm:inline">Cas</span>
+              </button>
             )}
           </div>
+
+          {/* SCRUB BAR LATÉRALE DROITE */}
+          <div
+            ref={scrubTrackRef}
+            onPointerDown={handleScrubPointerDown}
+            onPointerMove={handleScrubPointerMove}
+            onPointerUp={handleScrubPointerUp}
+            onPointerCancel={handleScrubPointerUp}
+            style={{
+              touchAction: 'none',
+              overscrollBehavior: 'none',
+            }}
+            className="w-8 sm:w-9 h-[68%] absolute right-1.5 top-1/2 -translate-y-1/2 z-20 rounded-full bg-slate-950/80 backdrop-blur border border-slate-800/90 hover:border-cyan-500/50 shadow-xl flex flex-col items-center justify-between py-2.5 cursor-ns-resize select-none"
+          >
+            <div className="text-[10px] font-mono font-bold text-cyan-300 leading-none">
+              {sliceIndex + 1}
+            </div>
+
+            <div className="relative flex-1 w-1.5 my-2 bg-slate-800/90 rounded-full">
+              <div
+                style={{ height: `${progressRatio * 100}%` }}
+                className="w-full bg-cyan-400 rounded-full transition-none"
+              />
+              <div
+                style={{ top: `${progressRatio * 100}%` }}
+                className="absolute left-1/2 -translate-x-1/2 -translate-y-1/2 w-5 h-3 rounded-full bg-cyan-300 border border-slate-950 shadow"
+              />
+            </div>
+
+            <div className="text-[10px] font-mono text-slate-500 leading-none">
+              {seriesManifest?.sliceCount || 1}
+            </div>
+          </div>
+        </div>
+
+        {/* VOLET PÉDAGOGIQUE PLIABLE À DROITE (Clinique, Coupe Clé, Annotations & Diagnostic masqué/révélé) */}
+        {isPedagogicalPanelOpen && (
+          <aside className="w-64 sm:w-72 h-full bg-[#0B101B]/95 backdrop-blur-md border-l border-slate-800 p-3.5 overflow-y-auto flex flex-col gap-3 z-30 absolute right-0 top-0 bottom-0 md:static shrink-0 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <GraduationCap className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span className="text-xs font-bold text-white truncate">
+                  {archive.manifest.title || 'Cas Pédagogique'}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsPedagogicalPanelOpen(false)}
+                className="p-1 rounded text-slate-400 hover:text-white cursor-pointer"
+                title="Replier le volet pédagogique"
+              >
+                <PanelRightClose className="w-4 h-4" />
+              </button>
+            </div>
+
+            {archive.manifest.anatomicalRegion && (
+              <div className="flex items-center gap-1.5">
+                <span className="px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-mono font-bold text-[10px]">
+                  {archive.manifest.modality}
+                </span>
+                <span className="text-xs text-slate-300 truncate">
+                  {archive.manifest.anatomicalRegion}
+                </span>
+              </div>
+            )}
+
+            {/* Contexte Clinique */}
+            <div className="space-y-1">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                Contexte Clinique
+              </div>
+              <p className="text-xs text-slate-200 leading-snug bg-slate-900/70 p-2.5 rounded-lg border border-slate-800/80">
+                {archive.manifest.clinicalHistory || 'Aucun renseignement clinique spécifié dans ce .tpack.'}
+              </p>
+            </div>
+
+            {/* Navigation directe vers la Coupe Clé et les Annotations */}
+            <div className="space-y-1.5">
+              <button
+                type="button"
+                onClick={() => handleJumpToKeySlice(true)}
+                className="w-full py-1.5 px-2.5 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/40 text-cyan-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer"
+              >
+                <Crosshair className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Aller à la Coupe Clé (#{effectiveKeySliceIndex + 1})</span>
+              </button>
+
+              {annotatedSlicesList.length > 0 && (
+                <div className="space-y-1 pt-1">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    Annotations ({annotatedSlicesList.length})
+                  </div>
+                  {annotatedSlicesList.map((ann, idx) => (
+                    <button
+                      key={`${ann.seriesId}_${ann.sliceIndex}_${idx}`}
+                      type="button"
+                      onClick={() => {
+                        setActiveSeriesId(ann.seriesId);
+                        setSliceIndex(ann.sliceIndex);
+                        setShowAnnotations(true);
+                      }}
+                      className="w-full text-left px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs text-slate-300 flex items-center justify-between gap-1 cursor-pointer"
+                    >
+                      <span className="truncate">{ann.label}</span>
+                      <span className="text-[10px] font-mono text-cyan-400 shrink-0">
+                        #{ann.sliceIndex + 1}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Révélation du Diagnostic & Sémiologie */}
+            <div className="space-y-2 pt-2 border-t border-slate-800/80">
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !showDiagnosis;
+                  setShowDiagnosis(next);
+                  if (next) {
+                    handleJumpToKeySlice(true);
+                  }
+                }}
+                className="w-full py-1.5 px-2.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer"
+              >
+                {showDiagnosis ? (
+                  <>
+                    <EyeOff className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Masquer le diagnostic</span>
+                  </>
+                ) : (
+                  <>
+                    <Eye className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Révéler le diagnostic</span>
+                  </>
+                )}
+              </button>
+
+              {showDiagnosis && (
+                <div className="p-2.5 rounded-lg bg-emerald-950/40 border border-emerald-500/40 text-xs text-emerald-100 leading-snug whitespace-pre-line">
+                  {archive.manifest.diagnosis ||
+                    'Aucun diagnostic textuel enregistré dans ce fichier .tpack.'}
+                </div>
+              )}
+            </div>
+          </aside>
         )}
       </div>
 
@@ -981,15 +1153,16 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
 
           <button
             type="button"
-            onClick={() => setShowCaseInfo((prev) => !prev)}
-            className={`p-1.5 rounded-lg border transition cursor-pointer ${
-              showCaseInfo
+            onClick={() => setIsPedagogicalPanelOpen((prev) => !prev)}
+            className={`px-2.5 py-1 rounded-lg border text-xs font-semibold flex items-center gap-1 transition cursor-pointer ${
+              isPedagogicalPanelOpen
                 ? 'bg-emerald-500/20 border-emerald-400 text-emerald-200'
                 : 'bg-slate-900 border-slate-800 text-slate-300 hover:text-white'
             }`}
-            title="Contexte clinique"
+            title="Ouvrir / Fermer le volet pédagogique (Clinique & Diagnostic)"
           >
-            <Info className="w-3.5 h-3.5 text-emerald-400" />
+            <GraduationCap className="w-3.5 h-3.5 text-emerald-400" />
+            <span className="hidden xs:inline">Pédagogie</span>
           </button>
         </div>
       </div>
