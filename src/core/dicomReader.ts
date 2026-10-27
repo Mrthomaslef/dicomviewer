@@ -17,8 +17,9 @@ export interface ParsedDicomSlice {
   instanceNumber: number;
   seriesInstanceUID: string;
   seriesDescription: string;
+  bodyPartExamined?: string;
   imageType: string;
-  modality: "MR" | "CT" | "CR" | "DX" | "XA" | "US";
+  modality: "MR" | "CT" | "RX" | "CR" | "DX" | "XA" | "US";
   rows: number;
   columns: number;
   pixelSpacing: [number, number];
@@ -48,7 +49,8 @@ export interface ParsedDicomSeries {
   seriesInstanceUID: string;
   seriesNumber: number;
   description: string;
-  modality: "MR" | "CT" | "CR" | "DX" | "XA" | "US";
+  bodyPartExamined?: string;
+  modality: "MR" | "CT" | "RX" | "CR" | "DX" | "XA" | "US";
   anatomicalPlane: AnatomicalPlane;
   width: number;
   height: number;
@@ -306,6 +308,7 @@ export async function parseDicomFile(file: File): Promise<ParsedDicomSlice | nul
       dataSet.string('x00081030') ||
       `Série #${seriesNumber}`;
     const seriesDescription = rawDesc.trim();
+    const bodyPartExamined = (dataSet.string('x00180015') || '').trim() || undefined;
     const imageType = (dataSet.string('x00080008') || '').trim();
     const modality = normalizeModality(dataSet.string('x00080060'));
 
@@ -456,6 +459,7 @@ export async function parseDicomFile(file: File): Promise<ParsedDicomSlice | nul
       instanceNumber,
       seriesInstanceUID,
       seriesDescription,
+      bodyPartExamined,
       imageType,
       modality,
       rows,
@@ -932,6 +936,7 @@ export async function parseDicomFiles(
       seriesInstanceUID: first.seriesInstanceUID,
       seriesNumber: first.seriesNumber,
       description: label,
+      bodyPartExamined: first.bodyPartExamined,
       modality: first.modality,
       anatomicalPlane: plane,
       width: first.columns,

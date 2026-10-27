@@ -96,11 +96,17 @@ export const CaseLibraryView: React.FC<CaseLibraryViewProps> = ({
           const buffer = await file.arrayBuffer();
           const uint8 = new Uint8Array(buffer);
           const loaded = await loadTPackFromBuffer(uint8, true);
+          const cleanFileBase = file.name.replace(/\.(tpack|zip)$/i, '');
+          const nameParts = (loaded.manifest.caseId || cleanFileBase).split('-');
+          const inferredRegion =
+            nameParts.length >= 4 && ['CT', 'MR', 'RX'].includes(nameParts[0].toUpperCase())
+              ? nameParts[1].replace(/_/g, ' ')
+              : '';
           const item: StoredPedagogicalCase = {
-            id: loaded.manifest.caseId || `CAS-${Date.now()}`,
-            title: loaded.manifest.title || file.name.replace(/\.tpack$/i, ''),
+            id: loaded.manifest.caseId || cleanFileBase || `CAS-${Date.now()}`,
+            title: loaded.manifest.title || cleanFileBase,
             modality: loaded.manifest.modality,
-            anatomicalRegion: loaded.manifest.anatomicalRegion || '',
+            anatomicalRegion: loaded.manifest.anatomicalRegion || inferredRegion,
             clinicalHistory: loaded.manifest.clinicalHistory || '',
             diagnosis: loaded.manifest.diagnosis || '',
             keySliceIndex: loaded.manifest.keySliceIndex,
@@ -215,7 +221,7 @@ export const CaseLibraryView: React.FC<CaseLibraryViewProps> = ({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${c.id.toLowerCase()}.tpack`;
+    a.download = `${c.id}.tpack`;
     a.click();
     URL.revokeObjectURL(url);
   };

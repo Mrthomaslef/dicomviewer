@@ -136,11 +136,17 @@ export async function connectAndScanLocalDirectory(
       const buf = await f.arrayBuffer();
       const uint8 = new Uint8Array(buf);
       const loaded = await loadTPackFromBuffer(uint8, true);
+      const cleanBase = f.name.replace(/\.(tpack|zip)$/i, '');
+      const nameParts = (loaded.manifest.caseId || cleanBase).split('-');
+      const inferredRegion =
+        nameParts.length >= 4 && ['CT', 'MR', 'RX'].includes(nameParts[0].toUpperCase())
+          ? nameParts[1].replace(/_/g, ' ')
+          : '';
       const item: StoredPedagogicalCase = {
-        id: loaded.manifest.caseId || f.name.replace(/\.tpack$/i, '') || `CAS-${Date.now()}`,
-        title: loaded.manifest.title || f.name.replace(/\.tpack$/i, ''),
+        id: loaded.manifest.caseId || cleanBase || `CAS-${Date.now()}`,
+        title: loaded.manifest.title || cleanBase,
         modality: loaded.manifest.modality,
-        anatomicalRegion: loaded.manifest.anatomicalRegion || '',
+        anatomicalRegion: loaded.manifest.anatomicalRegion || inferredRegion,
         clinicalHistory: loaded.manifest.clinicalHistory || '',
         diagnosis: loaded.manifest.diagnosis || '',
         keySliceIndex: loaded.manifest.keySliceIndex,
@@ -266,11 +272,17 @@ export async function syncFromGoogleDrive(
     const uint8 = new Uint8Array(buf);
     try {
       const loaded = await loadTPackFromBuffer(uint8, true);
+      const cleanBase = entry.name.replace(/\.(tpack|zip)$/i, '');
+      const nameParts = (loaded.manifest.caseId || cleanBase).split('-');
+      const inferredRegion =
+        nameParts.length >= 4 && ['CT', 'MR', 'RX'].includes(nameParts[0].toUpperCase())
+          ? nameParts[1].replace(/_/g, ' ')
+          : '';
       const item: StoredPedagogicalCase = {
-        id: loaded.manifest.caseId || entry.name.replace(/\.tpack$/i, ''),
-        title: loaded.manifest.title || entry.name.replace(/\.tpack$/i, ''),
+        id: loaded.manifest.caseId || cleanBase,
+        title: loaded.manifest.title || cleanBase,
         modality: loaded.manifest.modality,
-        anatomicalRegion: loaded.manifest.anatomicalRegion || '',
+        anatomicalRegion: loaded.manifest.anatomicalRegion || inferredRegion,
         clinicalHistory: loaded.manifest.clinicalHistory || '',
         diagnosis: loaded.manifest.diagnosis || '',
         keySliceIndex: loaded.manifest.keySliceIndex,

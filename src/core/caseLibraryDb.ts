@@ -3,7 +3,7 @@ import { PedagogicalManifest } from '../types/manifest';
 export interface StoredPedagogicalCase {
   id: string;
   title: string;
-  modality: "MR" | "CT" | "CR" | "DX" | "XA" | "US";
+  modality: "MR" | "CT" | "RX" | "CR" | "DX" | "XA" | "US";
   anatomicalRegion: string;
   clinicalHistory: string;
   diagnosis?: string;

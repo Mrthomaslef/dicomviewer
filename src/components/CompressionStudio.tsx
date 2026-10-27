@@ -86,13 +86,28 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
     total: 0,
   });
 
-  // Métadonnées du cas clinique (intégrées dans le fichier .tpack)
-  const [caseId, setCaseId] = useState<string>('CAS-01');
-  const [caseTitle, setCaseTitle] = useState<string>('');
+  // Métadonnées du cas clinique (intégrées dans le fichier .tpack : Modalité-Région-ID-numéro)
+  const [caseModality, setCaseModality] = useState<'CT' | 'MR' | 'RX'>('CT');
   const [anatomicalRegion, setAnatomicalRegion] = useState<string>('');
+  const [userCaseId, setUserCaseId] = useState<string>(
+    () => localStorage.getItem('tpack_default_user_id') || ''
+  );
+  const [caseNumber, setCaseNumber] = useState<string>('01');
   const [clinicalHistory, setClinicalHistory] = useState<string>('');
   const [diagnosis, setDiagnosis] = useState<string>('');
   const [markedKeySliceOrigIdx, setMarkedKeySliceOrigIdx] = useState<number | null>(null);
+
+  const composedCaseName = useMemo(() => {
+    const cleanPart = (val: string, fallback: string) =>
+      (val.trim() || fallback)
+        .replace(/\s+/g, '_')
+        .replace(/[^a-zA-Z0-9À-ÿ_]/g, '');
+    const mod = caseModality;
+    const reg = cleanPart(anatomicalRegion, 'Region');
+    const uid = cleanPart(userCaseId, 'ID');
+    const num = cleanPart(caseNumber, '01');
+    return `${mod}-${reg}-${uid}-${num}`;
+  }, [caseModality, anatomicalRegion, userCaseId, caseNumber]);
 
   // Options de compression par série (clé = seriesKey)
   const [seriesOptionsMap, setSeriesOptionsMap] = useState<Record<string, StudioSeriesBuildOptions>>({});
@@ -168,7 +183,18 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
     setActiveSeriesIdx(0);
     if (seriesList.length > 0) {
       setPreviewSliceIdx(0);
-      setStudioPreviewWindow(seriesList[0].modality === 'CT' ? 'soft' : 'custom');
+      const firstMod = seriesList[0].modality;
+      setStudioPreviewWindow(firstMod === 'CT' ? 'soft' : 'custom');
+      if (firstMod === 'MR') setCaseModality('MR');
+      else if (firstMod === 'CR' || firstMod === 'DX' || firstMod === 'XA' || firstMod === 'RX') {
+        setCaseModality('RX');
+      } else {
+        setCaseModality('CT');
+      }
+      const detectedBodyPart = seriesList.find((s) => s.bodyPartExamined)?.bodyPartExamined;
+      if (detectedBodyPart) {
+        setAnatomicalRegion((prev) => (prev.trim() ? prev : detectedBodyPart));
+      }
     }
     setLastBuiltBytes(null);
   }, []);
@@ -606,9 +632,9 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
 
       const archiveBytes = await buildTPackArchive(
         {
-          caseId: caseId.trim() || `CAS-${Date.now()}`,
-          title: caseTitle.trim() || firstOpt.series.description || 'Cas Clinique',
-          modality: seriesOptions[0].series.modality,
+          caseId: composedCaseName,
+          title: composedCaseName,
+          modality: caseModality,
           anatomicalRegion: anatomicalRegion.trim() || undefined,
           clinicalHistory: clinicalHistory.trim() || undefined,
           diagnosis: diagnosis.trim() || undefined,
@@ -623,8 +649,7 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
 
       setLastBuiltBytes(archiveBytes);
 
-      const safeFileName =
-        (caseId || 'cas-clinique').toLowerCase().replace(/[^a-z0-9-_]+/g, '-') + '.tpack';
+      const safeFileName = `${composedCaseName}.tpack`;
 
       const saveToLocalIndexedDB = async () => {
         const loaded = await loadTPackFromBuffer(archiveBytes, true);
@@ -822,20 +847,35 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
 
           {/* Métadonnées Pédagogiques intégrées dans le fichier .tpack */}
         <div className="p-3.5 rounded-xl bg-slate-900/70 border border-slate-800 space-y-2.5">
-          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-cyan-400">
-            <Info className="w-3.5 h-3.5" />
-            <span>Métadonnées intégrées au .tpack</span>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-cyan-400">
+              <Info className="w-3.5 h-3.5" />
+              <span>Métadonnées &amp; Nom du .tpack</span>
+            </div>
+            <span className="text-[10px] font-mono text-cyan-300 bg-slate-950 px-2 py-0.5 rounded border border-slate-800 truncate max-w-[180px]">
+              {composedCaseName}.tpack
+            </span>
           </div>
+
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <label className="text-[11px] text-slate-400 block mb-0.5">ID Cas</label>
-              <input
-                type="text"
-                value={caseId}
-                onChange={(e) => setCaseId(e.target.value)}
-                placeholder="CAS-01"
-                className="w-full px-2.5 py-1.5 rounded bg-slate-950 border border-slate-800 text-xs text-slate-100 focus:border-cyan-500 focus:outline-none"
-              />
+              <label className="text-[11px] text-slate-400 block mb-0.5">Modalité</label>
+              <div className="grid grid-cols-3 gap-1">
+                {(['CT', 'MR', 'RX'] as const).map((mod) => (
+                  <button
+                    key={mod}
+                    type="button"
+                    onClick={() => setCaseModality(mod)}
+                    className={`py-1.5 rounded text-xs font-bold border transition cursor-pointer ${
+                      caseModality === mod
+                        ? 'bg-cyan-500 text-slate-950 border-cyan-400'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    {mod}
+                  </button>
+                ))}
+              </div>
             </div>
             <div>
               <label className="text-[11px] text-slate-400 block mb-0.5">Région Anatomique</label>
@@ -848,15 +888,35 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
               />
             </div>
           </div>
-          <div>
-            <label className="text-[11px] text-slate-400 block mb-0.5">Titre du Cas</label>
-            <input
-              type="text"
-              value={caseTitle}
-              onChange={(e) => setCaseTitle(e.target.value)}
-              placeholder="Ex: Appendicite aiguë, Fracture..."
-              className="w-full px-2.5 py-1.5 rounded bg-slate-950 border border-slate-800 text-xs text-slate-100 focus:border-cyan-500 focus:outline-none"
-            />
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-[11px] text-slate-400 block mb-0.5">ID</label>
+              <input
+                type="text"
+                value={userCaseId}
+                onChange={(e) => {
+                  setUserCaseId(e.target.value);
+                  try {
+                    localStorage.setItem('tpack_default_user_id', e.target.value);
+                  } catch {
+                    // Ignore
+                  }
+                }}
+                placeholder="Ex: TL, APHP..."
+                className="w-full px-2.5 py-1.5 rounded bg-slate-950 border border-slate-800 text-xs text-slate-100 focus:border-cyan-500 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="text-[11px] text-slate-400 block mb-0.5">Numéro</label>
+              <input
+                type="text"
+                value={caseNumber}
+                onChange={(e) => setCaseNumber(e.target.value)}
+                placeholder="01"
+                className="w-full px-2.5 py-1.5 rounded bg-slate-950 border border-slate-800 text-xs text-slate-100 focus:border-cyan-500 focus:outline-none font-mono"
+              />
+            </div>
           </div>
           <div>
             <label className="text-[11px] text-slate-400 block mb-0.5">Information Clinique</label>

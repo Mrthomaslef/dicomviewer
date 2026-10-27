@@ -28,7 +28,7 @@ export interface StudioSeriesBuildOptions {
 export interface TPackBuildConfig {
   caseId: string;
   title: string;
-  modality: "MR" | "CT" | "CR" | "DX" | "XA" | "US";
+  modality: "MR" | "CT" | "RX" | "CR" | "DX" | "XA" | "US";
   anatomicalRegion?: string;
   clinicalHistory?: string;
   diagnosis?: string;
