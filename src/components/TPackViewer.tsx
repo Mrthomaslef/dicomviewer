@@ -54,6 +54,7 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
   const [brightness, setBrightness] = useState<number>(1.0);
 
   const [rulerActive, setRulerActive] = useState<boolean>(false);
+  const [windowToolActive, setWindowToolActive] = useState<boolean>(false);
   const [showAnnotations, setShowAnnotations] = useState<boolean>(false);
   const isEmbedded = typeof window !== 'undefined' && window.parent !== window;
   const [isPedagogicalPanelOpen, setIsPedagogicalPanelOpen] = useState<boolean>(!isEmbedded);
@@ -278,7 +279,17 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
       } else if (key === 'z') {
         setActiveKeyMode('z');
       } else if (key === 'm') {
-        setRulerActive((prev) => !prev);
+        setRulerActive((prev) => {
+          const next = !prev;
+          if (next) setWindowToolActive(false);
+          return next;
+        });
+      } else if (key === 'f') {
+        setWindowToolActive((prev) => {
+          const next = !prev;
+          if (next) setRulerActive(false);
+          return next;
+        });
       } else if (key === 'a') {
         setShowAnnotations((prev) => !prev);
       } else if (key === 'r') {
@@ -568,6 +579,10 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
 
   const handleViewportPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (isScrubbingRef.current) return;
+    // Empêche le défilement automatique du navigateur lors du clic molette (bouton du milieu = 1)
+    if (e.button === 1) {
+      e.preventDefault();
+    }
     e.currentTarget.setPointerCapture(e.pointerId);
     activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
@@ -696,9 +711,17 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
       return;
     }
 
-    if (activeKeyMode === 'w') {
-      setContrast((c) => Math.max(0.3, Math.min(3.0, c + dx * 0.005)));
-      setBrightness((b) => Math.max(0.3, Math.min(2.5, b - dy * 0.005)));
+    // Fenêtrage interactif (Contraste horizontal / Luminosité verticale) :
+    // - Soit en maintenant le clic molette ((e.buttons & 4) !== 0)
+    // - Soit lorsque le bouton "Fenêtrage" (windowToolActive) est activé
+    // - Soit en maintenant la touche W
+    if (
+      activeKeyMode === 'w' ||
+      (e.buttons & 4) !== 0 ||
+      (windowToolActive && (e.pointerType === 'touch' || (e.buttons & 1) !== 0))
+    ) {
+      setContrast((c) => Math.max(0.3, Math.min(3.0, c + dx * 0.006)));
+      setBrightness((b) => Math.max(0.3, Math.min(2.5, b - dy * 0.006)));
       return;
     }
 
@@ -707,7 +730,7 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
       return;
     }
 
-    if (activeKeyMode === 'space' || e.buttons === 4) {
+    if (activeKeyMode === 'space' || (e.buttons & 2) !== 0) {
       setPan((p) => ({
         x: p.x + dx * dpr,
         y: p.y + dy * dpr,
@@ -715,7 +738,7 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
       return;
     }
 
-    if (!rulerActive && (e.pointerType === 'touch' || e.buttons === 1)) {
+    if (!rulerActive && !windowToolActive && (e.pointerType === 'touch' || e.buttons === 1)) {
       const SLICE_SCROLL_STEP_PX = 11;
       touchScrollAccumulatorRef.current += dy;
       if (Math.abs(touchScrollAccumulatorRef.current) >= SLICE_SCROLL_STEP_PX) {
@@ -771,16 +794,6 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
   const handleScrubPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     e.stopPropagation();
     isScrubbingRef.current = false;
-  };
-
-  const handleCycleWindow = () => {
-    if (!seriesManifest || seriesManifest.availableWindows.length <= 1) return;
-    const wins = seriesManifest.availableWindows;
-    const currentIdx = wins.findIndex((w) => w.key === activeWindowKey);
-    const nextWin = wins[(currentIdx + 1) % wins.length];
-    if (nextWin) {
-      setActiveWindowKey(nextWin.key);
-    }
   };
 
   const progressRatio =
@@ -850,6 +863,66 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
               {zoom !== 1 && (
                 <span className="text-[11px] text-amber-300">{zoom.toFixed(1)}×</span>
               )}
+              {(contrast !== 1 || brightness !== 1 || windowToolActive) && (
+                <span className="text-[10px] text-cyan-300">
+                  C:{Math.round(contrast * 100)}% L:{Math.round(brightness * 100)}%
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* Bandeau flottant de réglage du Fenêtrage lorsque le bouton Fenêtrage est actif */}
+          {windowToolActive && (
+            <div
+              onPointerDown={(e) => e.stopPropagation()}
+              className="absolute bottom-3 left-3 right-12 sm:right-auto sm:w-80 z-30 rounded-xl bg-slate-950/95 backdrop-blur border border-cyan-500/40 p-3 shadow-2xl space-y-2"
+            >
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-semibold text-cyan-300 flex items-center gap-1.5">
+                  <SunMedium className="w-3.5 h-3.5" />
+                  <span>Fenêtrage actif (glissez sur l&apos;image ou curseurs)</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setContrast(1.0);
+                    setBrightness(1.0);
+                  }}
+                  className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
+                >
+                  100%
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-2.5 text-[11px]">
+                <div>
+                  <div className="flex justify-between text-slate-400 mb-0.5">
+                    <span>Contraste</span>
+                    <span className="font-mono text-cyan-300">{Math.round(contrast * 100)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={30}
+                    max={300}
+                    value={Math.round(contrast * 100)}
+                    onChange={(e) => setContrast(Number(e.target.value) / 100)}
+                    className="w-full accent-cyan-400"
+                  />
+                </div>
+                <div>
+                  <div className="flex justify-between text-slate-400 mb-0.5">
+                    <span>Luminosité</span>
+                    <span className="font-mono text-cyan-300">{Math.round(brightness * 100)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={30}
+                    max={250}
+                    value={Math.round(brightness * 100)}
+                    onChange={(e) => setBrightness(Number(e.target.value) / 100)}
+                    className="w-full accent-cyan-400"
+                  />
+                </div>
+              </div>
             </div>
           )}
 
@@ -1083,8 +1156,8 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
             </div>
           )}
 
-          {/* Switch Fenêtres (Os / Mou) */}
-          {seriesManifest && seriesManifest.availableWindows.length > 1 ? (
+          {/* Switch Fenêtres (Os / Mou) s'il y a plusieurs fenêtres pré-calculées */}
+          {seriesManifest && seriesManifest.availableWindows.length > 1 && (
             <div className="flex items-center bg-slate-900 p-0.5 rounded-lg border border-slate-800 shrink-0">
               {seriesManifest.availableWindows.map((win) => {
                 const isActive = activeWindowKey === win.key;
@@ -1110,23 +1183,41 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
                 );
               })}
             </div>
-          ) : (
-            <button
-              type="button"
-              onClick={handleCycleWindow}
-              className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-300 flex items-center gap-1 shrink-0"
-            >
-              <SunMedium className="w-3.5 h-3.5 text-cyan-400" />
-              <span className="hidden sm:inline">Fenêtre</span>
-            </button>
           )}
+
+          {/* Bouton Outil Fenêtrage (Contraste / Luminosité au clic gauche, tactile ou clic molette direct) */}
+          <button
+            type="button"
+            onClick={() =>
+              setWindowToolActive((prev) => {
+                const next = !prev;
+                if (next) setRulerActive(false);
+                return next;
+              })
+            }
+            className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 border transition cursor-pointer shrink-0 ${
+              windowToolActive
+                ? 'bg-cyan-500/20 border-cyan-400 text-cyan-200'
+                : 'bg-slate-900 border-slate-800 text-slate-300 hover:text-white'
+            }`}
+            title="Activer l'outil Fenêtrage (ou maintenez directement le clic molette sur l'image)"
+          >
+            <SunMedium className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Fenêtrage</span>
+          </button>
         </div>
 
-        {/* Outils : Règle, Annotations, Infos */}
+        {/* Outils : Règle, Annotations, Pédagogie */}
         <div className="flex items-center gap-1 shrink-0">
           <button
             type="button"
-            onClick={() => setRulerActive((prev) => !prev)}
+            onClick={() =>
+              setRulerActive((prev) => {
+                const next = !prev;
+                if (next) setWindowToolActive(false);
+                return next;
+              })
+            }
             className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 border transition cursor-pointer ${
               rulerActive
                 ? 'bg-amber-500/20 border-amber-400 text-amber-200'
