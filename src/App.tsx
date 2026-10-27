@@ -1,34 +1,51 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Activity,
   Eye,
   Cpu,
   Sparkles,
   ShieldCheck,
+  BookOpen,
 } from 'lucide-react';
-import { LoadedTPackArchive, disposeLoadedTPack } from './core/tpackLoader';
+import {
+  LoadedTPackArchive,
+  disposeLoadedTPack,
+  loadTPackFromBuffer,
+} from './core/tpackLoader';
 import { generateDemoTPackArchive } from './core/demoCaseGenerator';
 import { TPackViewer } from './components/TPackViewer';
 import { CompressionStudio } from './components/CompressionStudio';
+import { CaseLibraryView } from './components/CaseLibraryView';
 
-type AppMode = 'viewer' | 'studio';
+type AppMode = 'viewer' | 'library' | 'studio';
 
 export const App: React.FC = () => {
+  const urlParams = useMemo(() => new URLSearchParams(window.location.search), []);
+  const isEmbedMode = urlParams.get('embed') === '1' || urlParams.get('embed') === 'true';
+  const initialCaseUrl = urlParams.get('caseUrl');
+
   const [mode, setMode] = useState<AppMode>('viewer');
   const [loadedArchive, setLoadedArchive] = useState<LoadedTPackArchive | null>(null);
   const [isGeneratingDemo, setIsGeneratingDemo] = useState<boolean>(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [libraryRefreshKey, setLibraryRefreshKey] = useState<number>(0);
+
+  const handleLoadNewArchive = useCallback((newArchive: LoadedTPackArchive) => {
+    setLoadedArchive((prev) => {
+      if (prev && prev !== newArchive) {
+        disposeLoadedTPack(prev);
+      }
+      return newArchive;
+    });
+    setMode('viewer');
+  }, []);
 
   const loadDemoCase = useCallback(async () => {
     setIsGeneratingDemo(true);
     setErrorMsg(null);
     try {
       const demoArchive = await generateDemoTPackArchive();
-      setLoadedArchive((prev) => {
-        if (prev) disposeLoadedTPack(prev);
-        return demoArchive;
-      });
-      setMode('viewer');
+      handleLoadNewArchive(demoArchive);
     } catch (err) {
       setErrorMsg(
         err instanceof Error
@@ -38,13 +55,77 @@ export const App: React.FC = () => {
     } finally {
       setIsGeneratingDemo(false);
     }
-  }, []);
+  }, [handleLoadNewArchive]);
 
+  // Initialisation : charge ?caseUrl=... si fourni, sinon le fantôme de démo
   useEffect(() => {
-    loadDemoCase();
-  }, [loadDemoCase]);
+    let cancelled = false;
+    async function init() {
+      if (initialCaseUrl) {
+        setIsGeneratingDemo(true);
+        try {
+          const res = await fetch(initialCaseUrl);
+          if (!res.ok) throw new Error(`Impossible de charger ${initialCaseUrl}`);
+          const buf = await res.arrayBuffer();
+          const loaded = await loadTPackFromBuffer(buf, true);
+          if (!cancelled) {
+            handleLoadNewArchive(loaded);
+          }
+          return;
+        } catch {
+          // Fallback sur le cas de démo si l'URL externe échoue
+        } finally {
+          if (!cancelled) setIsGeneratingDemo(false);
+        }
+      }
+      if (!cancelled) {
+        await loadDemoCase();
+      }
+    }
+    init();
+    return () => {
+      cancelled = true;
+    };
+  }, [initialCaseUrl, loadDemoCase, handleLoadNewArchive]);
 
-  // Empêche le navigateur sur ordinateur (Chrome/Safari/Firefox/Edge) de zoomer sur la page entière lors d'un pincement au trackpad
+  // Pont API postMessage pour le Mode Embed (permet au site de Cas Cliniques d'envoyer un buffer .tpack ou une URL)
+  useEffect(() => {
+    const handleMessage = async (event: MessageEvent) => {
+      const data = event.data;
+      if (!data || typeof data !== 'object') return;
+
+      try {
+        if (data.type === 'TPACK_LOAD_BUFFER' && data.buffer) {
+          setIsGeneratingDemo(true);
+          const loaded = await loadTPackFromBuffer(data.buffer, true);
+          handleLoadNewArchive(loaded);
+          setIsGeneratingDemo(false);
+        } else if (data.type === 'TPACK_LOAD_URL' && typeof data.url === 'string') {
+          setIsGeneratingDemo(true);
+          const res = await fetch(data.url);
+          const buf = await res.arrayBuffer();
+          const loaded = await loadTPackFromBuffer(buf, true);
+          handleLoadNewArchive(loaded);
+          setIsGeneratingDemo(false);
+        } else if (data.type === 'TPACK_LOAD_DEMO') {
+          await loadDemoCase();
+        }
+      } catch (err) {
+        setIsGeneratingDemo(false);
+        setErrorMsg(
+          err instanceof Error ? err.message : 'Erreur chargement .tpack via postMessage'
+        );
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({ type: 'TPACK_EMBED_READY' }, '*');
+    }
+    return () => window.removeEventListener('message', handleMessage);
+  }, [handleLoadNewArchive, loadDemoCase]);
+
+  // Empêche le navigateur sur ordinateur de zoomer sur la page entière lors d'un pincement au trackpad
   useEffect(() => {
     const preventPageWheelZoom = (e: WheelEvent) => {
       if (e.ctrlKey) {
@@ -66,15 +147,28 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  const handleLoadNewArchive = useCallback((newArchive: LoadedTPackArchive) => {
-    setLoadedArchive((prev) => {
-      if (prev && prev !== newArchive) {
-        disposeLoadedTPack(prev);
-      }
-      return newArchive;
-    });
-    setMode('viewer');
-  }, []);
+  // Mode Embed plein écran (?embed=1) : uniquement le lecteur .tpack (utilisé par le site de Cas Pédagogiques)
+  if (isEmbedMode) {
+    return (
+      <div className="h-[100dvh] w-screen bg-[#090D16] text-slate-100 overflow-hidden select-none">
+        {isGeneratingDemo || !loadedArchive ? (
+          <div className="h-full w-full flex flex-col items-center justify-center gap-3 bg-[#090D16] p-6 text-center">
+            <div className="w-10 h-10 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 animate-pulse">
+              <Sparkles className="w-5 h-5" />
+            </div>
+            <div className="text-xs font-semibold text-slate-200">
+              Chargement du lecteur <code className="text-cyan-400">.tpack</code> 60 fps...
+            </div>
+          </div>
+        ) : (
+          <TPackViewer
+            archive={loadedArchive}
+            onLoadNewArchive={handleLoadNewArchive}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="h-[100dvh] w-screen flex flex-col bg-[#090D16] text-slate-100 overflow-hidden select-none">
@@ -98,12 +192,12 @@ export const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Sélecteur des 2 Modes Principaux : Lecteur Pédagogique vs Studio de Compression */}
+        {/* Sélecteur des 3 Modes : Lecteur / Bibliothèque / Studio DICOM */}
         <div className="flex items-center bg-slate-900/90 p-0.5 sm:p-1 rounded-xl border border-slate-800">
           <button
             type="button"
             onClick={() => setMode('viewer')}
-            className={`px-2.5 sm:px-3 py-1 rounded-lg text-[11px] sm:text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition cursor-pointer ${
+            className={`px-2 sm:px-3 py-1 rounded-lg text-[11px] sm:text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition cursor-pointer ${
               mode === 'viewer'
                 ? 'bg-cyan-500 text-slate-950 shadow-sm'
                 : 'text-slate-400 hover:text-slate-200'
@@ -115,15 +209,28 @@ export const App: React.FC = () => {
 
           <button
             type="button"
+            onClick={() => setMode('library')}
+            className={`px-2 sm:px-3 py-1 rounded-lg text-[11px] sm:text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition cursor-pointer ${
+              mode === 'library'
+                ? 'bg-cyan-500 text-slate-950 shadow-sm'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <BookOpen className="w-3.5 h-3.5" />
+            <span>Bibliothèque</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => setMode('studio')}
-            className={`px-2.5 sm:px-3 py-1 rounded-lg text-[11px] sm:text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition cursor-pointer ${
+            className={`px-2 sm:px-3 py-1 rounded-lg text-[11px] sm:text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition cursor-pointer ${
               mode === 'studio'
                 ? 'bg-cyan-500 text-slate-950 shadow-sm'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
             <Cpu className="w-3.5 h-3.5" />
-            <span>Studio DICOM</span>
+            <span>Studio</span>
           </button>
         </div>
 
@@ -169,8 +276,16 @@ export const App: React.FC = () => {
               onLoadNewArchive={handleLoadNewArchive}
             />
           )
+        ) : mode === 'library' ? (
+          <CaseLibraryView
+            onOpenArchive={handleLoadNewArchive}
+            refreshTrigger={libraryRefreshKey}
+          />
         ) : (
-          <CompressionStudio onOpenGeneratedTPack={handleLoadNewArchive} />
+          <CompressionStudio
+            onOpenGeneratedTPack={handleLoadNewArchive}
+            onCaseSavedToLibrary={() => setLibraryRefreshKey((k) => k + 1)}
+          />
         )}
       </main>
     </div>

@@ -34,16 +34,20 @@ import {
 } from '../core/tpackBuilder';
 import { generateSyntheticDicomFiles } from '../core/demoCaseGenerator';
 import { LoadedTPackArchive, loadTPackFromBuffer } from '../core/tpackLoader';
+import { saveCaseToIndexedDB, StoredPedagogicalCase } from '../core/caseLibraryDb';
 
 interface CompressionStudioProps {
   onOpenGeneratedTPack: (archive: LoadedTPackArchive) => void;
+  onCaseSavedToLibrary?: () => void;
 }
 
 type StudioCanvasTool = 'none' | 'mask' | 'arrow' | 'circle';
 
 export const CompressionStudio: React.FC<CompressionStudioProps> = ({
   onOpenGeneratedTPack,
+  onCaseSavedToLibrary,
 }) => {
+  const [savedNotice, setSavedNotice] = useState<boolean>(false);
   const [parsedSeriesList, setParsedSeriesList] = useState<ParsedDicomSeries[]>([]);
   const [activeSeriesIdx, setActiveSeriesIdx] = useState<number>(0);
   const [isParsing, setIsParsing] = useState<boolean>(false);
@@ -473,11 +477,14 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
     setDragCurrentNorm(null);
   };
 
-  const handleBuildAndAction = async (mode: 'download' | 'open_viewer') => {
+  const handleBuildAndAction = async (
+    mode: 'download' | 'open_viewer' | 'save_library'
+  ) => {
     const seriesOptions = Object.values(seriesOptionsMap);
     if (seriesOptions.length === 0) return;
 
     setIsBuilding(true);
+    setSavedNotice(false);
     setBuildProgress({ current: 0, total: sizeEstimation.totalEncodedFrames });
 
     try {
@@ -509,6 +516,23 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
         a.download = safeFileName;
         a.click();
         URL.revokeObjectURL(url);
+      } else if (mode === 'save_library') {
+        const loaded = await loadTPackFromBuffer(archiveBytes, true);
+        const item: StoredPedagogicalCase = {
+          id: loaded.manifest.caseId || `CAS-${Date.now()}`,
+          title: loaded.manifest.title,
+          modality: loaded.manifest.modality,
+          anatomicalRegion: loaded.manifest.anatomicalRegion || 'Général',
+          clinicalHistory: loaded.manifest.clinicalHistory || '',
+          createdAt: new Date().toISOString(),
+          byteSize: archiveBytes.byteLength,
+          source: 'indexeddb',
+          tpackBytes: archiveBytes,
+          manifest: loaded.manifest,
+        };
+        await saveCaseToIndexedDB(item);
+        setSavedNotice(true);
+        if (onCaseSavedToLibrary) onCaseSavedToLibrary();
       } else {
         const loaded = await loadTPackFromBuffer(archiveBytes, true);
         onOpenGeneratedTPack(loaded);
@@ -1214,6 +1238,22 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
             <Play className="w-4 h-4 fill-current" />
             Compiler &amp; Ouvrir dans le Lecteur 60 fps
           </button>
+
+          <button
+            type="button"
+            disabled={!activeSeries || isBuilding}
+            onClick={() => handleBuildAndAction('save_library')}
+            className="w-full py-2.5 px-4 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 disabled:opacity-40 border border-emerald-500/40 text-emerald-200 font-semibold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
+          >
+            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+            Enregistrer dans ma Bibliothèque (IndexedDB)
+          </button>
+
+          {savedNotice && (
+            <div className="p-2 rounded-lg bg-emerald-950/60 border border-emerald-500/40 text-[11px] text-emerald-200 text-center">
+              Cas enregistré dans la Bibliothèque locale !
+            </div>
+          )}
 
           <button
             type="button"

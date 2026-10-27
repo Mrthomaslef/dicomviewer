@@ -112,6 +112,57 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
     }
   }, [archive]);
 
+  // Pont API postMessage bidirectionnel : permet au site de Cas Pédagogiques (parent iframe)
+  // de piloter le lecteur (aller à une coupe clé, changer de fenêtre Os/Mou, afficher les annotations)
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      const data = event.data;
+      if (!data || typeof data !== 'object') return;
+
+      if (data.type === 'TPACK_GOTO') {
+        if (typeof data.seriesId === 'string' && archive.seriesMap[data.seriesId]) {
+          setActiveSeriesId(data.seriesId);
+        }
+        if (typeof data.windowKey === 'string') {
+          setActiveWindowKey(data.windowKey);
+        }
+        if (typeof data.sliceIndex === 'number') {
+          setSliceIndex(
+            Math.max(0, Math.min((seriesManifest?.sliceCount || 1) - 1, data.sliceIndex))
+          );
+        }
+        if (typeof data.showAnnotations === 'boolean') {
+          setShowAnnotations(data.showAnnotations);
+        }
+      } else if (data.type === 'TPACK_RESET_VIEW') {
+        setZoom(1);
+        setPan({ x: 0, y: 0 });
+        setContrast(1);
+        setBrightness(1);
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [archive, seriesManifest]);
+
+  // Émet l'état courant vers la fenêtre parente si le lecteur est intégré en mode iframe
+  useEffect(() => {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage(
+        {
+          type: 'TPACK_VIEWER_STATE',
+          caseId: archive.manifest.caseId,
+          seriesId: activeSeriesId,
+          windowKey: activeWindowKey,
+          sliceIndex,
+          sliceCount: seriesManifest?.sliceCount || 0,
+        },
+        '*'
+      );
+    }
+  }, [archive.manifest.caseId, activeSeriesId, activeWindowKey, sliceIndex, seriesManifest]);
+
   const handleSelectSeries = useCallback(
     (newSeriesId: string) => {
       const target = archive.seriesMap[newSeriesId]?.manifest;
