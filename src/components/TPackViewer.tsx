@@ -842,8 +842,8 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
               ? 'cursor-crosshair'
               : activeKeyMode === 'space'
               ? 'cursor-grabbing'
-              : activeKeyMode === 'w'
-              ? 'cursor-ns-resize'
+              : windowToolActive || activeKeyMode === 'w'
+              ? 'cursor-move'
               : activeKeyMode === 'z'
               ? 'cursor-zoom-in'
               : 'cursor-ns-resize'
@@ -868,61 +868,6 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
                   C:{Math.round(contrast * 100)}% L:{Math.round(brightness * 100)}%
                 </span>
               )}
-            </div>
-          )}
-
-          {/* Bandeau flottant de réglage du Fenêtrage lorsque le bouton Fenêtrage est actif */}
-          {windowToolActive && (
-            <div
-              onPointerDown={(e) => e.stopPropagation()}
-              className="absolute bottom-3 left-3 right-12 sm:right-auto sm:w-80 z-30 rounded-xl bg-slate-950/95 backdrop-blur border border-cyan-500/40 p-3 shadow-2xl space-y-2"
-            >
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-semibold text-cyan-300 flex items-center gap-1.5">
-                  <SunMedium className="w-3.5 h-3.5" />
-                  <span>Fenêtrage actif (glissez sur l&apos;image ou curseurs)</span>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setContrast(1.0);
-                    setBrightness(1.0);
-                  }}
-                  className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
-                >
-                  100%
-                </button>
-              </div>
-              <div className="grid grid-cols-2 gap-2.5 text-[11px]">
-                <div>
-                  <div className="flex justify-between text-slate-400 mb-0.5">
-                    <span>Contraste</span>
-                    <span className="font-mono text-cyan-300">{Math.round(contrast * 100)}%</span>
-                  </div>
-                  <input
-                    type="range"
-                    min={30}
-                    max={300}
-                    value={Math.round(contrast * 100)}
-                    onChange={(e) => setContrast(Number(e.target.value) / 100)}
-                    className="w-full accent-cyan-400"
-                  />
-                </div>
-                <div>
-                  <div className="flex justify-between text-slate-400 mb-0.5">
-                    <span>Luminosité</span>
-                    <span className="font-mono text-cyan-300">{Math.round(brightness * 100)}%</span>
-                  </div>
-                  <input
-                    type="range"
-                    min={30}
-                    max={250}
-                    value={Math.round(brightness * 100)}
-                    onChange={(e) => setBrightness(Number(e.target.value) / 100)}
-                    className="w-full accent-cyan-400"
-                  />
-                </div>
-              </div>
             </div>
           )}
 
