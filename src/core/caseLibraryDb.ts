@@ -6,6 +6,7 @@ export interface StoredPedagogicalCase {
   modality: "MR" | "CT" | "CR" | "DX" | "XA" | "US";
   anatomicalRegion: string;
   clinicalHistory: string;
+  diagnosis?: string;
   question?: string;
   choices?: string[];
   correctChoiceIndex?: number;

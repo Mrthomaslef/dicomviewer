@@ -5,6 +5,9 @@ export interface PedagogicalManifest {
   modality: "MR" | "CT" | "CR" | "DX" | "XA" | "US";
   anatomicalRegion?: string;
   clinicalHistory?: string;
+  diagnosis?: string;
+  keySliceIndex?: number;
+  keyWindowKey?: string;
   series: SeriesManifest[];
 }
 

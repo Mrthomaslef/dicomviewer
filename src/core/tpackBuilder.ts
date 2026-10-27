@@ -31,6 +31,9 @@ export interface TPackBuildConfig {
   modality: "MR" | "CT" | "CR" | "DX" | "XA" | "US";
   anatomicalRegion?: string;
   clinicalHistory?: string;
+  diagnosis?: string;
+  keySliceIndex?: number;
+  keyWindowKey?: string;
   seriesOptions: StudioSeriesBuildOptions[];
 }
 
@@ -452,6 +455,9 @@ export async function buildTPackArchive(
     modality: config.modality,
     anatomicalRegion: config.anatomicalRegion,
     clinicalHistory: config.clinicalHistory,
+    diagnosis: config.diagnosis,
+    keySliceIndex: config.keySliceIndex,
+    keyWindowKey: config.keyWindowKey,
     series: seriesManifests,
   };
 

@@ -852,9 +852,9 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
           </div>
         </div>
 
-        {/* Popover Infos Cas compact */}
+        {/* Popover Infos Cas & Diagnostic lus depuis le .tpack */}
         {showCaseInfo && (
-          <div className="absolute bottom-3 left-3 right-12 sm:right-auto sm:w-80 z-30 rounded-xl bg-slate-950/95 backdrop-blur border border-slate-800 p-3 shadow-2xl space-y-1.5">
+          <div className="absolute bottom-3 left-3 right-12 sm:right-auto sm:w-80 z-30 rounded-xl bg-slate-950/95 backdrop-blur border border-slate-800 p-3 shadow-2xl space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-cyan-300 truncate">
                 {archive.manifest.title}
@@ -868,9 +868,20 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
               </button>
             </div>
             {archive.manifest.clinicalHistory && (
-              <p className="text-xs text-slate-300 leading-snug">
-                {archive.manifest.clinicalHistory}
-              </p>
+              <div className="space-y-0.5">
+                <div className="text-[10px] font-bold uppercase text-slate-400">Clinique</div>
+                <p className="text-xs text-slate-200 leading-snug">
+                  {archive.manifest.clinicalHistory}
+                </p>
+              </div>
+            )}
+            {archive.manifest.diagnosis && (
+              <div className="space-y-0.5 pt-1 border-t border-slate-800">
+                <div className="text-[10px] font-bold uppercase text-emerald-400">Diagnostic</div>
+                <p className="text-xs text-emerald-200 leading-snug">
+                  {archive.manifest.diagnosis}
+                </p>
+              </div>
             )}
           </div>
         )}

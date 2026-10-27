@@ -1,18 +1,19 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Activity,
   Eye,
   Cpu,
-  Sparkles,
   ShieldCheck,
   BookOpen,
+  FolderUp,
 } from 'lucide-react';
 import {
   LoadedTPackArchive,
   disposeLoadedTPack,
   loadTPackFromBuffer,
+  loadTPackFromFile,
 } from './core/tpackLoader';
-import { generateDemoTPackArchive } from './core/demoCaseGenerator';
+import { listCasesFromIndexedDB } from './core/caseLibraryDb';
 import { TPackViewer } from './components/TPackViewer';
 import { CompressionStudio } from './components/CompressionStudio';
 import { CaseLibraryView } from './components/CaseLibraryView';
@@ -26,11 +27,13 @@ export const App: React.FC = () => {
 
   const [mode, setMode] = useState<AppMode>('viewer');
   const [loadedArchive, setLoadedArchive] = useState<LoadedTPackArchive | null>(null);
-  const [isGeneratingDemo, setIsGeneratingDemo] = useState<boolean>(true);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [libraryRefreshKey, setLibraryRefreshKey] = useState<number>(0);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const handleLoadNewArchive = useCallback((newArchive: LoadedTPackArchive) => {
+    setErrorMsg(null);
     setLoadedArchive((prev) => {
       if (prev && prev !== newArchive) {
         disposeLoadedTPack(prev);
@@ -40,29 +43,12 @@ export const App: React.FC = () => {
     setMode('viewer');
   }, []);
 
-  const loadDemoCase = useCallback(async () => {
-    setIsGeneratingDemo(true);
-    setErrorMsg(null);
-    try {
-      const demoArchive = await generateDemoTPackArchive();
-      handleLoadNewArchive(demoArchive);
-    } catch (err) {
-      setErrorMsg(
-        err instanceof Error
-          ? err.message
-          : 'Erreur lors de la génération du fantôme .tpack en RAM.'
-      );
-    } finally {
-      setIsGeneratingDemo(false);
-    }
-  }, [handleLoadNewArchive]);
-
-  // Initialisation : charge ?caseUrl=... si fourni, sinon le fantôme de démo
+  // Initialisation : charge ?caseUrl=... si fourni, ou le dernier cas stocké en local (hors mode embed)
   useEffect(() => {
     let cancelled = false;
     async function init() {
       if (initialCaseUrl) {
-        setIsGeneratingDemo(true);
+        setIsLoading(true);
         try {
           const res = await fetch(initialCaseUrl);
           if (!res.ok) throw new Error(`Impossible de charger ${initialCaseUrl}`);
@@ -71,24 +57,41 @@ export const App: React.FC = () => {
           if (!cancelled) {
             handleLoadNewArchive(loaded);
           }
-          return;
-        } catch {
-          // Fallback sur le cas de démo si l'URL externe échoue
+        } catch (err) {
+          if (!cancelled) {
+            setErrorMsg(err instanceof Error ? err.message : 'Erreur de chargement du fichier .tpack');
+          }
         } finally {
-          if (!cancelled) setIsGeneratingDemo(false);
+          if (!cancelled) setIsLoading(false);
         }
+        return;
       }
-      if (!cancelled) {
-        await loadDemoCase();
+
+      // En mode normal (non-embed), charge automatiquement le dernier .tpack enregistré dans IndexedDB s'il existe
+      if (!isEmbedMode) {
+        const stored = await listCasesFromIndexedDB();
+        if (!cancelled && stored.length > 0 && stored[0].tpackBytes) {
+          try {
+            setIsLoading(true);
+            const loaded = await loadTPackFromBuffer(stored[0].tpackBytes, true);
+            if (!cancelled) {
+              handleLoadNewArchive(loaded);
+            }
+          } catch {
+            // Ignorer si corrompu
+          } finally {
+            if (!cancelled) setIsLoading(false);
+          }
+        }
       }
     }
     init();
     return () => {
       cancelled = true;
     };
-  }, [initialCaseUrl, loadDemoCase, handleLoadNewArchive]);
+  }, [initialCaseUrl, isEmbedMode, handleLoadNewArchive]);
 
-  // Pont API postMessage pour le Mode Embed (permet au site de Cas Cliniques d'envoyer un buffer .tpack ou une URL)
+  // Pont API postMessage pour le Mode Embed (reçoit le buffer .tpack ou l'URL depuis le site TPack.cases)
   useEffect(() => {
     const handleMessage = async (event: MessageEvent) => {
       const data = event.data;
@@ -96,22 +99,21 @@ export const App: React.FC = () => {
 
       try {
         if (data.type === 'TPACK_LOAD_BUFFER' && data.buffer) {
-          setIsGeneratingDemo(true);
+          setIsLoading(true);
           const loaded = await loadTPackFromBuffer(data.buffer, true);
           handleLoadNewArchive(loaded);
-          setIsGeneratingDemo(false);
+          setIsLoading(false);
         } else if (data.type === 'TPACK_LOAD_URL' && typeof data.url === 'string') {
-          setIsGeneratingDemo(true);
+          setIsLoading(true);
           const res = await fetch(data.url);
+          if (!res.ok) throw new Error(`Fichier introuvable : ${data.url}`);
           const buf = await res.arrayBuffer();
           const loaded = await loadTPackFromBuffer(buf, true);
           handleLoadNewArchive(loaded);
-          setIsGeneratingDemo(false);
-        } else if (data.type === 'TPACK_LOAD_DEMO') {
-          await loadDemoCase();
+          setIsLoading(false);
         }
       } catch (err) {
-        setIsGeneratingDemo(false);
+        setIsLoading(false);
         setErrorMsg(
           err instanceof Error ? err.message : 'Erreur chargement .tpack via postMessage'
         );
@@ -123,7 +125,7 @@ export const App: React.FC = () => {
       window.parent.postMessage({ type: 'TPACK_EMBED_READY' }, '*');
     }
     return () => window.removeEventListener('message', handleMessage);
-  }, [handleLoadNewArchive, loadDemoCase]);
+  }, [handleLoadNewArchive]);
 
   // Empêche le navigateur sur ordinateur de zoomer sur la page entière lors d'un pincement au trackpad
   useEffect(() => {
@@ -147,57 +149,74 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  // Mode Embed plein écran (?embed=1) : uniquement le lecteur .tpack (utilisé par le site de Cas Pédagogiques)
+  // Mode Embed plein écran (?embed=1)
   if (isEmbedMode) {
     return (
       <div className="h-[100dvh] w-screen bg-[#090D16] text-slate-100 overflow-hidden select-none">
-        {isGeneratingDemo || !loadedArchive ? (
-          <div className="h-full w-full flex flex-col items-center justify-center gap-3 bg-[#090D16] p-6 text-center">
-            <div className="w-10 h-10 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 animate-pulse">
-              <Sparkles className="w-5 h-5" />
-            </div>
-            <div className="text-xs font-semibold text-slate-200">
-              Chargement du lecteur <code className="text-cyan-400">.tpack</code> 60 fps...
-            </div>
-          </div>
-        ) : (
+        {loadedArchive ? (
           <TPackViewer
             archive={loadedArchive}
             onLoadNewArchive={handleLoadNewArchive}
           />
+        ) : (
+          <div className="h-full w-full flex flex-col items-center justify-center gap-2 bg-[#090D16] p-6 text-center">
+            <div className="text-xs text-slate-400">
+              {isLoading ? 'Décodage du fichier .tpack en cours...' : 'En attente d’un fichier .tpack...'}
+            </div>
+          </div>
         )}
       </div>
     );
   }
 
   return (
-    <div className="h-[100dvh] w-screen flex flex-col bg-[#090D16] text-slate-100 overflow-hidden select-none">
-      {/* BARRE DE NAVIGATION PRINCIPALE (Console PACS Dark Mode #090D16) */}
-      <header className="h-11 sm:h-12 shrink-0 bg-[#090D16] border-b border-slate-800/90 px-2.5 sm:px-5 flex items-center justify-between gap-2 z-30">
-        {/* Identité Visuelle */}
+    <div
+      className="h-[100dvh] w-screen flex flex-col bg-[#090D16] text-slate-100 overflow-hidden select-none"
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={async (e) => {
+        e.preventDefault();
+        const file = e.dataTransfer.files?.[0];
+        if (file && file.name.toLowerCase().endsWith('.tpack')) {
+          const loaded = await loadTPackFromFile(file);
+          handleLoadNewArchive(loaded);
+        }
+      }}
+    >
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".tpack,.zip"
+        className="hidden"
+        onChange={async (e) => {
+          const file = e.target.files?.[0];
+          if (file) {
+            const loaded = await loadTPackFromFile(file);
+            handleLoadNewArchive(loaded);
+          }
+        }}
+      />
+
+      {/* BARRE DE NAVIGATION PRINCIPALE */}
+      <header className="h-11 shrink-0 bg-[#090D16] border-b border-slate-800/90 px-3 flex items-center justify-between gap-2 z-30">
         <div className="flex items-center gap-2 min-w-0">
-          <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-cyan-500/15 border border-cyan-500/40 flex items-center justify-center text-cyan-400 shrink-0">
+          <div className="w-7 h-7 rounded-lg bg-cyan-500/15 border border-cyan-500/40 flex items-center justify-center text-cyan-400 shrink-0">
             <Activity className="w-4 h-4" />
           </div>
-          <div className="truncate">
-            <div className="flex items-center gap-2">
-              <span className="font-bold text-xs sm:text-sm tracking-tight text-white">
-                TPack<span className="text-cyan-400">.pacs</span>
-              </span>
-              <span className="hidden md:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-[10px] font-medium text-emerald-300">
-                <ShieldCheck className="w-3 h-3" />
-                Zéro-Serveur • WebP 8-bit
-              </span>
-            </div>
-          </div>
+          <span className="font-bold text-xs sm:text-sm tracking-tight text-white truncate">
+            TPack<span className="text-cyan-400">.pacs</span>
+          </span>
+          <span className="hidden md:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-[10px] font-medium text-emerald-300">
+            <ShieldCheck className="w-3 h-3" />
+            Zéro-Serveur
+          </span>
         </div>
 
         {/* Sélecteur des 3 Modes : Lecteur / Bibliothèque / Studio DICOM */}
-        <div className="flex items-center bg-slate-900/90 p-0.5 sm:p-1 rounded-xl border border-slate-800">
+        <div className="flex items-center bg-slate-900/90 p-0.5 rounded-xl border border-slate-800">
           <button
             type="button"
             onClick={() => setMode('viewer')}
-            className={`px-2 sm:px-3 py-1 rounded-lg text-[11px] sm:text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition cursor-pointer ${
+            className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
               mode === 'viewer'
                 ? 'bg-cyan-500 text-slate-950 shadow-sm'
                 : 'text-slate-400 hover:text-slate-200'
@@ -210,7 +229,7 @@ export const App: React.FC = () => {
           <button
             type="button"
             onClick={() => setMode('library')}
-            className={`px-2 sm:px-3 py-1 rounded-lg text-[11px] sm:text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition cursor-pointer ${
+            className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
               mode === 'library'
                 ? 'bg-cyan-500 text-slate-950 shadow-sm'
                 : 'text-slate-400 hover:text-slate-200'
@@ -223,7 +242,7 @@ export const App: React.FC = () => {
           <button
             type="button"
             onClick={() => setMode('studio')}
-            className={`px-2 sm:px-3 py-1 rounded-lg text-[11px] sm:text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition cursor-pointer ${
+            className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
               mode === 'studio'
                 ? 'bg-cyan-500 text-slate-950 shadow-sm'
                 : 'text-slate-400 hover:text-slate-200'
@@ -234,18 +253,14 @@ export const App: React.FC = () => {
           </button>
         </div>
 
-        {/* Bouton de rechargement rapide du Fantôme de Démo */}
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={loadDemoCase}
-            className="p-1.5 sm:px-2.5 sm:py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs text-slate-300 hover:text-cyan-300 flex items-center gap-1.5 transition cursor-pointer"
-            title="Recharger le fantôme médical procédural en mémoire vive"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
-            <span className="hidden lg:inline">Cas Démo RAM</span>
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs text-slate-200 hover:text-cyan-300 flex items-center gap-1.5 transition cursor-pointer"
+        >
+          <FolderUp className="w-3.5 h-3.5 text-cyan-400" />
+          <span className="hidden sm:inline">Ouvrir .tpack</span>
+        </button>
       </header>
 
       {/* CORPS DE L'APPLICATION */}
@@ -257,24 +272,25 @@ export const App: React.FC = () => {
         )}
 
         {mode === 'viewer' ? (
-          isGeneratingDemo || !loadedArchive ? (
-            <div className="h-full w-full flex flex-col items-center justify-center gap-3 bg-[#090D16] p-6 text-center">
-              <div className="w-12 h-12 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 animate-pulse">
-                <Sparkles className="w-6 h-6" />
-              </div>
-              <div className="text-sm font-semibold text-slate-200">
-                Synthèse en RAM du Fantôme Médical <code className="text-cyan-400">.tpack</code>...
-              </div>
-              <div className="text-xs text-slate-400 max-w-sm">
-                Génération des coupes TDM Double-Fenêtre (Os / Parties Molles), IRM T2, calibration{' '}
-                <code>0.5 mm/px</code> et décodage en <code>ImageBitmap</code> 60 fps.
-              </div>
-            </div>
-          ) : (
+          loadedArchive ? (
             <TPackViewer
               archive={loadedArchive}
               onLoadNewArchive={handleLoadNewArchive}
             />
+          ) : (
+            <div className="h-full w-full flex flex-col items-center justify-center gap-3 bg-[#090D16] p-6 text-center">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="px-4 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold text-xs flex items-center gap-2 shadow-lg transition cursor-pointer"
+              >
+                <FolderUp className="w-4 h-4" />
+                Ouvrir un fichier .tpack
+              </button>
+              <p className="text-xs text-slate-400">
+                Ou glissez-déposez un fichier <code className="text-cyan-300">.tpack</code> sur l’écran.
+              </p>
+            </div>
           )
         ) : mode === 'library' ? (
           <CaseLibraryView

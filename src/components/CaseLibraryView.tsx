@@ -20,7 +20,6 @@ import {
   fetchPublicCatalogCases,
 } from '../core/caseLibraryDb';
 import { LoadedTPackArchive, loadTPackFromBuffer } from '../core/tpackLoader';
-import { generateDemoTPackArchive } from '../core/demoCaseGenerator';
 
 interface CaseLibraryViewProps {
   onOpenArchive: (archive: LoadedTPackArchive) => void;
@@ -62,6 +61,9 @@ export const CaseLibraryView: React.FC<CaseLibraryViewProps> = ({
           modality: loaded.manifest.modality,
           anatomicalRegion: loaded.manifest.anatomicalRegion || 'Général',
           clinicalHistory: loaded.manifest.clinicalHistory || '',
+          diagnosis: loaded.manifest.diagnosis || '',
+          keySliceIndex: loaded.manifest.keySliceIndex,
+          keyWindowKey: loaded.manifest.keyWindowKey,
           createdAt: new Date().toISOString(),
           byteSize: uint8.byteLength,
           source: 'indexeddb',
@@ -87,9 +89,6 @@ export const CaseLibraryView: React.FC<CaseLibraryViewProps> = ({
         const buf = await res.arrayBuffer();
         const loaded = await loadTPackFromBuffer(buf, true);
         onOpenArchive(loaded);
-      } else {
-        const demo = await generateDemoTPackArchive();
-        onOpenArchive(demo);
       }
     } finally {
       setLoadingId(null);

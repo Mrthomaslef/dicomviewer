@@ -56,13 +56,13 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
     total: 0,
   });
 
-  // Métadonnées du cas clinique
-  const [caseId, setCaseId] = useState<string>('CAS-PEDAGO-01');
-  const [caseTitle, setCaseTitle] = useState<string>('Cas Clinique Radiologique');
-  const [anatomicalRegion, setAnatomicalRegion] = useState<string>('Thorax / Abdomen');
-  const [clinicalHistory, setClinicalHistory] = useState<string>(
-    'Examen anonymisé et compressé via TPack Studio (encodage WebP 8 bits pré-fenêtré).'
-  );
+  // Métadonnées du cas clinique (intégrées dans le fichier .tpack)
+  const [caseId, setCaseId] = useState<string>('CAS-01');
+  const [caseTitle, setCaseTitle] = useState<string>('');
+  const [anatomicalRegion, setAnatomicalRegion] = useState<string>('');
+  const [clinicalHistory, setClinicalHistory] = useState<string>('');
+  const [diagnosis, setDiagnosis] = useState<string>('');
+  const [markedKeySliceOrigIdx, setMarkedKeySliceOrigIdx] = useState<number | null>(null);
 
   // Options de compression par série
   const [seriesOptionsMap, setSeriesOptionsMap] = useState<Record<string, StudioSeriesBuildOptions>>({});
@@ -488,13 +488,49 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
     setBuildProgress({ current: 0, total: sizeEstimation.totalEncodedFrames });
 
     try {
+      // Calcul de l'index de la coupe clé dans la pile exportée (après Crop Z et décimation)
+      const firstOpt = seriesOptions[0];
+      let targetOrigSlice = markedKeySliceOrigIdx;
+      if (targetOrigSlice === null && firstOpt) {
+        const annotatedOrigIndices = Object.keys(firstOpt.annotationsByOriginalSlice)
+          .map(Number)
+          .filter((k) => (firstOpt.annotationsByOriginalSlice[k]?.length ?? 0) > 0);
+        if (annotatedOrigIndices.length > 0) {
+          targetOrigSlice = annotatedOrigIndices[0];
+        } else {
+          targetOrigSlice = previewSliceIdx;
+        }
+      }
+
+      const exportedKeySliceIndex =
+        firstOpt && targetOrigSlice !== null
+          ? Math.max(
+              0,
+              Math.floor(
+                (Math.max(firstOpt.startIndex, Math.min(firstOpt.endIndex, targetOrigSlice)) -
+                  firstOpt.startIndex) /
+                  firstOpt.step
+              )
+            )
+          : 0;
+
+      const exportedKeyWindowKey =
+        firstOpt?.series.modality === 'CT' && firstOpt.doublePackCt
+          ? studioPreviewWindow === 'bone'
+            ? 'bone'
+            : 'soft'
+          : 'default';
+
       const archiveBytes = await buildTPackArchive(
         {
-          caseId: caseId.trim() || 'CAS-01',
-          title: caseTitle.trim() || 'Cas Clinique Pédagogique',
+          caseId: caseId.trim() || `CAS-${Date.now()}`,
+          title: caseTitle.trim() || firstOpt.series.description || 'Cas Clinique',
           modality: seriesOptions[0].series.modality,
           anatomicalRegion: anatomicalRegion.trim() || undefined,
           clinicalHistory: clinicalHistory.trim() || undefined,
+          diagnosis: diagnosis.trim() || undefined,
+          keySliceIndex: exportedKeySliceIndex,
+          keyWindowKey: exportedKeyWindowKey,
           seriesOptions,
         },
         (cur, tot) => {
@@ -524,6 +560,9 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
           modality: loaded.manifest.modality,
           anatomicalRegion: loaded.manifest.anatomicalRegion || 'Général',
           clinicalHistory: loaded.manifest.clinicalHistory || '',
+          diagnosis: loaded.manifest.diagnosis || '',
+          keySliceIndex: loaded.manifest.keySliceIndex,
+          keyWindowKey: loaded.manifest.keyWindowKey,
           createdAt: new Date().toISOString(),
           byteSize: archiveBytes.byteLength,
           source: 'indexeddb',
@@ -678,19 +717,20 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
           </div>
         )}
 
-        {/* Métadonnées du Manifest Pédagogique */}
+          {/* Métadonnées Pédagogiques intégrées dans le fichier .tpack */}
         <div className="p-3.5 rounded-xl bg-slate-900/70 border border-slate-800 space-y-2.5">
           <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-cyan-400">
             <Info className="w-3.5 h-3.5" />
-            <span>Métadonnées Pédagogiques (Whitelist)</span>
+            <span>Métadonnées intégrées au .tpack</span>
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <label className="text-[11px] text-slate-400 block mb-0.5">Identifiant Cas</label>
+              <label className="text-[11px] text-slate-400 block mb-0.5">ID Cas</label>
               <input
                 type="text"
                 value={caseId}
                 onChange={(e) => setCaseId(e.target.value)}
+                placeholder="CAS-01"
                 className="w-full px-2.5 py-1.5 rounded bg-slate-950 border border-slate-800 text-xs text-slate-100 focus:border-cyan-500 focus:outline-none"
               />
             </div>
@@ -700,6 +740,7 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
                 type="text"
                 value={anatomicalRegion}
                 onChange={(e) => setAnatomicalRegion(e.target.value)}
+                placeholder="Ex: Thorax, Genou..."
                 className="w-full px-2.5 py-1.5 rounded bg-slate-950 border border-slate-800 text-xs text-slate-100 focus:border-cyan-500 focus:outline-none"
               />
             </div>
@@ -710,18 +751,49 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
               type="text"
               value={caseTitle}
               onChange={(e) => setCaseTitle(e.target.value)}
+              placeholder="Ex: Appendicite aiguë, Fracture..."
               className="w-full px-2.5 py-1.5 rounded bg-slate-950 border border-slate-800 text-xs text-slate-100 focus:border-cyan-500 focus:outline-none"
             />
           </div>
           <div>
-            <label className="text-[11px] text-slate-400 block mb-0.5">Contexte Clinique</label>
+            <label className="text-[11px] text-slate-400 block mb-0.5">Information Clinique</label>
             <textarea
               rows={2}
               value={clinicalHistory}
               onChange={(e) => setClinicalHistory(e.target.value)}
+              placeholder="Contexte clinique, motif de l'examen..."
               className="w-full px-2.5 py-1.5 rounded bg-slate-950 border border-slate-800 text-xs text-slate-100 focus:border-cyan-500 focus:outline-none resize-none"
             />
           </div>
+          <div>
+            <label className="text-[11px] text-emerald-400 font-semibold block mb-0.5">
+              Diagnostic &amp; Sémiologie (inclus dans le .tpack)
+            </label>
+            <textarea
+              rows={2}
+              value={diagnosis}
+              onChange={(e) => setDiagnosis(e.target.value)}
+              placeholder="Diagnostic final et description des anomalies..."
+              className="w-full px-2.5 py-1.5 rounded bg-slate-950 border border-slate-800 text-xs text-slate-100 focus:border-emerald-500 focus:outline-none resize-none"
+            />
+          </div>
+          {activeSeries && (
+            <div className="flex items-center justify-between pt-1">
+              <span className="text-[11px] text-slate-400">
+                Coupe clé :{' '}
+                <strong className="text-cyan-300">
+                  #{markedKeySliceOrigIdx !== null ? markedKeySliceOrigIdx + 1 : previewSliceIdx + 1}
+                </strong>
+              </span>
+              <button
+                type="button"
+                onClick={() => setMarkedKeySliceOrigIdx(previewSliceIdx)}
+                className="px-2 py-1 rounded bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 text-[11px] text-cyan-300 font-medium cursor-pointer"
+              >
+                Définir coupe actuelle (#{previewSliceIdx + 1})
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Réglages de Coupe (Crop Z, Décimation, Redimensionnement 512px) */}
