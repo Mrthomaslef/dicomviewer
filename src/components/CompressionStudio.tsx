@@ -16,6 +16,11 @@ import {
   Info,
   FileArchive,
   ArrowUpDown,
+  CloudUpload,
+  Settings,
+  Copy,
+  ExternalLink,
+  X,
 } from 'lucide-react';
 import {
   AnnotationItem,
@@ -36,6 +41,14 @@ import {
 } from '../core/tpackBuilder';
 import { LoadedTPackArchive, loadTPackFromBuffer } from '../core/tpackLoader';
 import { saveCaseToIndexedDB, StoredPedagogicalCase } from '../core/caseLibraryDb';
+import {
+  extractGoogleDriveId,
+  GOOGLE_DRIVE_UPLOAD_APPS_SCRIPT_SNIPPET,
+  loadSavedGoogleDriveConfig,
+  saveGoogleDriveConfig,
+  saveTPackToLocalRepo,
+  uploadTPackToGoogleDrive,
+} from '../core/storageConnectors';
 
 interface CompressionStudioProps {
   onOpenGeneratedTPack: (archive: LoadedTPackArchive) => void;
@@ -48,7 +61,23 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
   onOpenGeneratedTPack,
   onCaseSavedToLibrary,
 }) => {
-  const [savedNotice, setSavedNotice] = useState<boolean>(false);
+  const [savedNotice, setSavedNotice] = useState<string | null>(null);
+  const [driveStatus, setDriveStatus] = useState<{
+    type: 'success' | 'error';
+    message: string;
+    folderUrl?: string;
+  } | null>(null);
+  const [showDriveModal, setShowDriveModal] = useState<boolean>(false);
+  const [driveFolderInput, setDriveFolderInput] = useState<string>(
+    () => loadSavedGoogleDriveConfig().folderUrlOrId
+  );
+  const [driveAppsScriptInput, setDriveAppsScriptInput] = useState<string>(
+    () => loadSavedGoogleDriveConfig().appsScriptUrl || ''
+  );
+  const [driveOauthClientIdInput, setDriveOauthClientIdInput] = useState<string>(
+    () => loadSavedGoogleDriveConfig().oauthClientId || ''
+  );
+  const [copiedScriptNotice, setCopiedScriptNotice] = useState<boolean>(false);
   const [parsedSeriesList, setParsedSeriesList] = useState<ParsedDicomSeries[]>([]);
   const [activeSeriesIdx, setActiveSeriesIdx] = useState<number>(0);
   const [isParsing, setIsParsing] = useState<boolean>(false);
@@ -511,13 +540,24 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
   };
 
   const handleBuildAndAction = async (
-    mode: 'download' | 'open_viewer' | 'save_library'
+    mode: 'save_local_repo' | 'save_drive' | 'open_viewer' | 'save_library'
   ) => {
     const seriesOptions = selectedSeriesOptionsList;
     if (seriesOptions.length === 0) return;
 
+    // Si l'utilisateur clique sur "Enregistrer sur mon Drive" sans avoir configuré de méthode d'envoi, ouvre la fenêtre de configuration Drive
+    if (
+      mode === 'save_drive' &&
+      !driveAppsScriptInput.trim() &&
+      !driveOauthClientIdInput.trim()
+    ) {
+      setShowDriveModal(true);
+      return;
+    }
+
     setIsBuilding(true);
-    setSavedNotice(false);
+    setSavedNotice(null);
+    setDriveStatus(null);
     setBuildProgress({ current: 0, total: sizeEstimation.totalEncodedFrames });
 
     try {
@@ -573,19 +613,10 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
 
       setLastBuiltBytes(archiveBytes);
 
-      if (mode === 'download') {
-        const blob = new Blob([archiveBytes.buffer.slice(archiveBytes.byteOffset, archiveBytes.byteOffset + archiveBytes.byteLength) as ArrayBuffer], {
-          type: 'application/octet-stream',
-        });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        const safeFileName =
-          (caseId || 'cas-clinique').toLowerCase().replace(/[^a-z0-9-_]+/g, '-') + '.tpack';
-        a.href = url;
-        a.download = safeFileName;
-        a.click();
-        URL.revokeObjectURL(url);
-      } else if (mode === 'save_library') {
+      const safeFileName =
+        (caseId || 'cas-clinique').toLowerCase().replace(/[^a-z0-9-_]+/g, '-') + '.tpack';
+
+      const saveToLocalIndexedDB = async () => {
         const loaded = await loadTPackFromBuffer(archiveBytes, true);
         const item: StoredPedagogicalCase = {
           id: loaded.manifest.caseId || `CAS-${Date.now()}`,
@@ -603,8 +634,45 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
           manifest: loaded.manifest,
         };
         await saveCaseToIndexedDB(item);
-        setSavedNotice(true);
         if (onCaseSavedToLibrary) onCaseSavedToLibrary();
+      };
+
+      if (mode === 'save_local_repo') {
+        const { savedLocation, cancelled } = await saveTPackToLocalRepo(
+          archiveBytes,
+          safeFileName
+        );
+        if (!cancelled) {
+          await saveToLocalIndexedDB();
+          setSavedNotice(`Enregistré dans : ${savedLocation}`);
+        }
+      } else if (mode === 'save_drive') {
+        try {
+          const res = await uploadTPackToGoogleDrive(archiveBytes, safeFileName, {
+            folderUrlOrId: driveFolderInput,
+            appsScriptUrl: driveAppsScriptInput,
+            oauthClientId: driveOauthClientIdInput,
+          });
+          await saveToLocalIndexedDB();
+          setDriveStatus({
+            type: 'success',
+            message: `Enregistré sur Google Drive : ${res.fileName}`,
+            folderUrl: res.folderUrl,
+          });
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : 'Erreur Google Drive';
+          if (msg === 'CONFIG_REQUIRED') {
+            setShowDriveModal(true);
+          } else {
+            setDriveStatus({
+              type: 'error',
+              message: msg,
+            });
+          }
+        }
+      } else if (mode === 'save_library') {
+        await saveToLocalIndexedDB();
+        setSavedNotice('Cas enregistré dans la Bibliothèque IndexedDB !');
       } else {
         const loaded = await loadTPackFromBuffer(archiveBytes, true);
         onOpenGeneratedTPack(loaded);
@@ -1393,33 +1461,210 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
             Compiler &amp; Ouvrir dans le Lecteur 60 fps
           </button>
 
+          {/* Enregistrement dans un dossier/repo choisi par l'utilisateur */}
           <button
             type="button"
             disabled={!activeSeries || isBuilding}
-            onClick={() => handleBuildAndAction('save_library')}
+            onClick={() => handleBuildAndAction('save_local_repo')}
             className="w-full py-2.5 px-4 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 disabled:opacity-40 border border-emerald-500/40 text-emerald-200 font-semibold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
           >
-            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-            Enregistrer dans ma Bibliothèque (IndexedDB)
+            <FolderOpen className="w-4 h-4 text-emerald-400" />
+            Enregistrer le .tpack (Choisir le dossier...)
           </button>
+
+          {/* Enregistrement direct sur Google Drive + bouton réglages */}
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              disabled={!activeSeries || isBuilding}
+              onClick={() => handleBuildAndAction('save_drive')}
+              className="flex-1 py-2.5 px-3 rounded-xl bg-blue-500/20 hover:bg-blue-500/30 disabled:opacity-40 border border-blue-500/40 text-blue-200 font-semibold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
+            >
+              <CloudUpload className="w-4 h-4 text-blue-400" />
+              Enregistrer sur mon Google Drive
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowDriveModal(true)}
+              className="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
+              title="Configurer mon dossier Google Drive"
+            >
+              <Settings className="w-4 h-4" />
+            </button>
+          </div>
 
           {savedNotice && (
             <div className="p-2 rounded-lg bg-emerald-950/60 border border-emerald-500/40 text-[11px] text-emerald-200 text-center">
-              Cas enregistré dans la Bibliothèque locale !
+              {savedNotice}
             </div>
           )}
 
-          <button
-            type="button"
-            disabled={!activeSeries || isBuilding}
-            onClick={() => handleBuildAndAction('download')}
-            className="w-full py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 border border-slate-700 text-slate-100 font-semibold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
-          >
-            <Download className="w-4 h-4" />
-            Télécharger l&apos;archive .tpack
-          </button>
+          {driveStatus && (
+            <div
+              className={`p-2 rounded-lg border text-[11px] text-center space-y-1 ${
+                driveStatus.type === 'success'
+                  ? 'bg-blue-950/60 border-blue-500/40 text-blue-200'
+                  : 'bg-rose-950/60 border-rose-500/40 text-rose-200'
+              }`}
+            >
+              <div>{driveStatus.message}</div>
+              {driveStatus.folderUrl && (
+                <a
+                  href={driveStatus.folderUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-cyan-300 underline font-semibold"
+                >
+                  <span>Ouvrir mon dossier Google Drive</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              )}
+            </div>
+          )}
         </div>
       </div>
+
+      {/* Modal de configuration Google Drive (Envoi en 1 clic vers le Drive) */}
+      {showDriveModal && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-[#0D1322] border border-slate-700/80 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <CloudUpload className="w-4 h-4 text-blue-400" />
+                <h3 className="text-sm font-semibold text-white">
+                  Enregistrer mes fichiers .tpack sur Google Drive
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDriveModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 overflow-y-auto space-y-4 text-xs text-slate-300">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-200 mb-1">
+                  1. Lien ou ID de votre dossier Google Drive cible
+                </label>
+                <input
+                  type="text"
+                  value={driveFolderInput}
+                  onChange={(e) => setDriveFolderInput(e.target.value)}
+                  placeholder="https://drive.google.com/drive/folders/1a2b3c..."
+                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs text-slate-100 focus:border-blue-400 focus:outline-none"
+                />
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-blue-950/30 border border-blue-500/30 space-y-2.5">
+                <div className="font-semibold text-blue-300 flex items-center justify-between">
+                  <span>2. Option A (Recommandée) : Pont Google Apps Script (1 clic permanent)</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-200">
+                    Sans OAuth Cloud
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-300 leading-relaxed">
+                  Collez ce mini-script de 8 lignes dans{' '}
+                  <a
+                    href="https://script.google.com/home/start"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-cyan-300 underline"
+                  >
+                    script.google.com
+                  </a>{' '}
+                  (<strong>Nouveau projet</strong> &rarr; <strong>Déployer &gt; Nouveau déploiement &gt; Application Web</strong> avec accès <em>Tout le monde</em>), puis collez l&apos;URL obtenue ci-dessous :
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(GOOGLE_DRIVE_UPLOAD_APPS_SCRIPT_SNIPPET);
+                      setCopiedScriptNotice(true);
+                      setTimeout(() => setCopiedScriptNotice(false), 2500);
+                    }}
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[11px] text-cyan-300 font-medium flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>
+                      {copiedScriptNotice ? 'Code Apps Script copié !' : 'Copier le script Google Drive (8 lignes)'}
+                    </span>
+                  </button>
+                </div>
+                <input
+                  type="url"
+                  value={driveAppsScriptInput}
+                  onChange={(e) => setDriveAppsScriptInput(e.target.value)}
+                  placeholder="https://script.google.com/macros/s/.../exec"
+                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs text-slate-100 focus:border-blue-400 focus:outline-none"
+                />
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2">
+                <div className="font-semibold text-slate-200">
+                  Option B : Client ID OAuth 2.0 Google Cloud (API Drive v3)
+                </div>
+                <input
+                  type="text"
+                  value={driveOauthClientIdInput}
+                  onChange={(e) => setDriveOauthClientIdInput(e.target.value)}
+                  placeholder="123456789-xxx.apps.googleusercontent.com"
+                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs text-slate-100 focus:border-cyan-400 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="px-5 py-3.5 border-t border-slate-800 bg-slate-950/60 flex flex-wrap items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  saveGoogleDriveConfig({
+                    folderUrlOrId: driveFolderInput,
+                    appsScriptUrl: driveAppsScriptInput,
+                    oauthClientId: driveOauthClientIdInput,
+                  });
+                  const fId = extractGoogleDriveId(driveFolderInput);
+                  const targetUrl = fId
+                    ? `https://drive.google.com/drive/folders/${fId}`
+                    : 'https://drive.google.com/drive/my-drive';
+                  window.open(targetUrl, '_blank', 'noopener,noreferrer');
+                  setShowDriveModal(false);
+                  if (activeSeries) {
+                    await handleBuildAndAction('save_local_repo');
+                  }
+                }}
+                className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-medium flex items-center gap-1.5 cursor-pointer"
+              >
+                <ExternalLink className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Enregistrer le fichier &amp; Ouvrir mon Drive</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  saveGoogleDriveConfig({
+                    folderUrlOrId: driveFolderInput,
+                    appsScriptUrl: driveAppsScriptInput,
+                    oauthClientId: driveOauthClientIdInput,
+                  });
+                  setShowDriveModal(false);
+                  if (
+                    activeSeries &&
+                    (driveAppsScriptInput.trim() || driveOauthClientIdInput.trim())
+                  ) {
+                    await handleBuildAndAction('save_drive');
+                  }
+                }}
+                className="px-4 py-2 rounded-xl bg-blue-500 hover:bg-blue-400 text-slate-950 font-semibold text-xs cursor-pointer"
+              >
+                Valider &amp; Envoyer sur Drive
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

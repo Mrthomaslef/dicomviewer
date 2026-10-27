@@ -8,6 +8,8 @@ const DRIVE_CONFIG_KEY = 'tpack_google_drive_config_v1';
 export interface GoogleDriveConfig {
   folderUrlOrId: string;
   apiKey: string;
+  appsScriptUrl?: string;
+  oauthClientId?: string;
 }
 
 function openHandleDb(): Promise<IDBDatabase> {
@@ -176,20 +178,29 @@ export function extractGoogleDriveId(input: string): string {
 export function loadSavedGoogleDriveConfig(): GoogleDriveConfig {
   try {
     const raw = localStorage.getItem(DRIVE_CONFIG_KEY);
-    if (!raw) return { folderUrlOrId: '', apiKey: '' };
+    if (!raw) return { folderUrlOrId: '', apiKey: '', appsScriptUrl: '', oauthClientId: '' };
     const parsed = JSON.parse(raw);
     return {
       folderUrlOrId: parsed.folderUrlOrId || '',
       apiKey: parsed.apiKey || '',
+      appsScriptUrl: parsed.appsScriptUrl || '',
+      oauthClientId: parsed.oauthClientId || '',
     };
   } catch {
-    return { folderUrlOrId: '', apiKey: '' };
+    return { folderUrlOrId: '', apiKey: '', appsScriptUrl: '', oauthClientId: '' };
   }
 }
 
-export function saveGoogleDriveConfig(config: GoogleDriveConfig): void {
+export function saveGoogleDriveConfig(config: Partial<GoogleDriveConfig>): void {
   try {
-    localStorage.setItem(DRIVE_CONFIG_KEY, JSON.stringify(config));
+    const current = loadSavedGoogleDriveConfig();
+    const merged: GoogleDriveConfig = {
+      folderUrlOrId: config.folderUrlOrId !== undefined ? config.folderUrlOrId : current.folderUrlOrId,
+      apiKey: config.apiKey !== undefined ? config.apiKey : current.apiKey,
+      appsScriptUrl: config.appsScriptUrl !== undefined ? config.appsScriptUrl : current.appsScriptUrl,
+      oauthClientId: config.oauthClientId !== undefined ? config.oauthClientId : current.oauthClientId,
+    };
+    localStorage.setItem(DRIVE_CONFIG_KEY, JSON.stringify(merged));
   } catch {
     // Ignore
   }
@@ -278,3 +289,260 @@ export async function syncFromGoogleDrive(
 
   return imported;
 }
+
+/**
+ * Demande explicitement à l'utilisateur de choisir le répertoire (repo) / emplacement local
+ * où enregistrer le fichier .tpack via l'API File System Access (showSaveFilePicker ou showDirectoryPicker),
+ * avec repli sur le téléchargement navigateur si l'OS/navigateur ne supporte pas le sélecteur natif.
+ */
+export async function saveTPackToLocalRepo(
+  archiveBytes: Uint8Array,
+  suggestedFileName: string
+): Promise<{ savedLocation: string; cancelled: boolean }> {
+  const cleanName = suggestedFileName.toLowerCase().endsWith('.tpack')
+    ? suggestedFileName
+    : `${suggestedFileName}.tpack`;
+
+  const byteSlice = archiveBytes.buffer.slice(
+    archiveBytes.byteOffset,
+    archiveBytes.byteOffset + archiveBytes.byteLength
+  ) as ArrayBuffer;
+
+  // 1. Priorité au sélecteur de fichier natif (Finder / Explorer "Enregistrer sous...") permettant de choisir le dossier et le nom
+  if (typeof window !== 'undefined' && 'showSaveFilePicker' in window) {
+    try {
+      // @ts-expect-error showSaveFilePicker est standard dans Chromium (Chrome, Edge, Brave, Opera)
+      const fileHandle = await window.showSaveFilePicker({
+        suggestedName: cleanName,
+        types: [
+          {
+            description: 'Archive Imagerie Médicale TPack (.tpack)',
+            accept: {
+              'application/octet-stream': ['.tpack'],
+            },
+          },
+        ],
+      });
+      const writable = await fileHandle.createWritable();
+      await writable.write(byteSlice);
+      await writable.close();
+      return { savedLocation: fileHandle.name || cleanName, cancelled: false };
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return { savedLocation: '', cancelled: true };
+      }
+      // Si autre erreur, continue vers showDirectoryPicker
+    }
+  }
+
+  // 2. Alternative : sélecteur de répertoire natif (showDirectoryPicker en écriture)
+  if (typeof window !== 'undefined' && 'showDirectoryPicker' in window) {
+    try {
+      // @ts-expect-error showDirectoryPicker
+      const dirHandle = (await window.showDirectoryPicker({
+        mode: 'readwrite',
+      })) as FileSystemDirectoryHandle;
+      await saveDirectoryHandle(dirHandle);
+      const fileHandle = await dirHandle.getFileHandle(cleanName, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(byteSlice);
+      await writable.close();
+      return { savedLocation: `${dirHandle.name}/${cleanName}`, cancelled: false };
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return { savedLocation: '', cancelled: true };
+      }
+    }
+  }
+
+  // 3. Fallback pour Safari / Firefox / Mobile : téléchargement standard
+  const blob = new Blob([byteSlice], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = cleanName;
+  a.click();
+  URL.revokeObjectURL(url);
+  return { savedLocation: cleanName, cancelled: false };
+}
+
+function uint8ToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const sub = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...sub);
+  }
+  return btoa(binary);
+}
+
+let cachedOAuthToken: { token: string; expiresAt: number } | null = null;
+
+async function getGoogleOAuthToken(clientId: string): Promise<string> {
+  if (cachedOAuthToken && Date.now() < cachedOAuthToken.expiresAt) {
+    return cachedOAuthToken.token;
+  }
+
+  if (typeof window === 'undefined') {
+    throw new Error('Environnement navigateur requis pour OAuth2.');
+  }
+
+  // Charge dynamiquement Google Identity Services (gsi/client) si non chargé
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const win = window as any;
+  if (!win.google?.accounts?.oauth2) {
+    await new Promise<void>((resolve, reject) => {
+      const existing = document.querySelector('script[src="https://accounts.google.com/gsi/client"]');
+      if (existing) {
+        existing.addEventListener('load', () => resolve());
+        existing.addEventListener('error', () => reject(new Error('Impossible de charger Google Identity Services')));
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = 'https://accounts.google.com/gsi/client';
+      script.async = true;
+      script.defer = true;
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error('Impossible de charger Google Identity Services'));
+      document.head.appendChild(script);
+    });
+  }
+
+  return await new Promise<string>((resolve, reject) => {
+    const tokenClient = win.google.accounts.oauth2.initTokenClient({
+      client_id: clientId.trim(),
+      scope: 'https://www.googleapis.com/auth/drive.file',
+      callback: (resp: { access_token?: string; expires_in?: number; error?: string }) => {
+        if (resp.error || !resp.access_token) {
+          reject(new Error(resp.error || 'Authentification Google Drive annulée.'));
+          return;
+        }
+        const ttlMs = ((resp.expires_in || 3500) - 60) * 1000;
+        cachedOAuthToken = {
+          token: resp.access_token,
+          expiresAt: Date.now() + ttlMs,
+        };
+        resolve(resp.access_token);
+      },
+    });
+    tokenClient.requestAccessToken({ prompt: '' });
+  });
+}
+
+/**
+ * Envoie directement un fichier .tpack dans le dossier Google Drive de l'utilisateur :
+ * - Soit via le pont Google Apps Script (sans OAuth ni console Cloud, permanent en 1 clic)
+ * - Soit via Google Drive API v3 Multipart Upload (OAuth2 Client ID)
+ */
+export async function uploadTPackToGoogleDrive(
+  archiveBytes: Uint8Array,
+  fileName: string,
+  options: {
+    folderUrlOrId: string;
+    appsScriptUrl?: string;
+    oauthClientId?: string;
+  }
+): Promise<{ fileName: string; folderUrl: string }> {
+  const cleanName = fileName.toLowerCase().endsWith('.tpack') ? fileName : `${fileName}.tpack`;
+  const folderId = extractGoogleDriveId(options.folderUrlOrId || '');
+  const appsScriptUrl = (options.appsScriptUrl || '').trim();
+  const oauthClientId = (options.oauthClientId || '').trim();
+
+  saveGoogleDriveConfig({
+    folderUrlOrId: options.folderUrlOrId,
+    appsScriptUrl,
+    oauthClientId,
+  });
+
+  const folderUrl = folderId
+    ? `https://drive.google.com/drive/folders/${folderId}`
+    : 'https://drive.google.com/drive/my-drive';
+
+  // Méthode 1 : Pont Google Apps Script (zéro configuration OAuth, envoi direct en POST text/plain CORS-safe)
+  if (appsScriptUrl) {
+    const payload = JSON.stringify({
+      fileName: cleanName,
+      folderId: folderId || '',
+      mimeType: 'application/octet-stream',
+      base64Data: uint8ToBase64(archiveBytes),
+    });
+
+    const res = await fetch(appsScriptUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8',
+      },
+      body: payload,
+    });
+
+    if (!res.ok) {
+      throw new Error(`Erreur lors de l'envoi au script Google Drive (${res.status}).`);
+    }
+
+    return { fileName: cleanName, folderUrl };
+  }
+
+  // Méthode 2 : API Google Drive v3 officielle via OAuth 2.0 Client ID
+  if (oauthClientId) {
+    const accessToken = await getGoogleOAuthToken(oauthClientId);
+    const metadata: { name: string; mimeType: string; parents?: string[] } = {
+      name: cleanName,
+      mimeType: 'application/octet-stream',
+    };
+    if (folderId) {
+      metadata.parents = [folderId];
+    }
+
+    const boundary = 'tpack_multipart_boundary_' + Date.now();
+    const metaPart =
+      `--${boundary}\r\n` +
+      `Content-Type: application/json; charset=UTF-8\r\n\r\n` +
+      `${JSON.stringify(metadata)}\r\n` +
+      `--${boundary}\r\n` +
+      `Content-Type: application/octet-stream\r\n\r\n`;
+    const closePart = `\r\n--${boundary}--`;
+
+    const encoder = new TextEncoder();
+    const metaBytes = encoder.encode(metaPart);
+    const closeBytes = encoder.encode(closePart);
+
+    const bodyBuffer = new Uint8Array(
+      metaBytes.byteLength + archiveBytes.byteLength + closeBytes.byteLength
+    );
+    bodyBuffer.set(metaBytes, 0);
+    bodyBuffer.set(archiveBytes, metaBytes.byteLength);
+    bodyBuffer.set(closeBytes, metaBytes.byteLength + archiveBytes.byteLength);
+
+    const uploadRes = await fetch(
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': `multipart/related; boundary=${boundary}`,
+        },
+        body: bodyBuffer,
+      }
+    );
+
+    if (!uploadRes.ok) {
+      throw new Error(
+        `Échec de l'envoi sur Google Drive API (${uploadRes.status}). Vérifiez le Client ID et les droits du dossier.`
+      );
+    }
+
+    return { fileName: cleanName, folderUrl };
+  }
+
+  throw new Error('CONFIG_REQUIRED');
+}
+
+export const GOOGLE_DRIVE_UPLOAD_APPS_SCRIPT_SNIPPET = `function doPost(e) {
+  var data = JSON.parse(e.postData.contents);
+  var bytes = Utilities.base64Decode(data.base64Data);
+  var blob = Utilities.newBlob(bytes, data.mimeType || 'application/octet-stream', data.fileName);
+  var folder = data.folderId ? DriveApp.getFolderById(data.folderId) : DriveApp.getRootFolder();
+  var file = folder.createFile(blob);
+  return ContentService.createTextOutput(JSON.stringify({ ok: true, id: file.getId(), name: file.getName() }))
+    .setMimeType(ContentService.MimeType.JSON);
+}`;
