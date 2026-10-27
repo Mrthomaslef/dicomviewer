@@ -16,14 +16,17 @@ import {
   Sliders,
   Info,
   FileArchive,
+  ArrowUpDown,
 } from 'lucide-react';
 import {
   AnnotationItem,
   BurnedInMaskRect,
 } from '../types/manifest';
 import {
+  DicomSortMode,
   parseDicomFiles,
   ParsedDicomSeries,
+  sortSeriesSlices,
 } from '../core/dicomReader';
 import {
   applyWindowLut8Bit,
@@ -64,8 +67,10 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
   const [diagnosis, setDiagnosis] = useState<string>('');
   const [markedKeySliceOrigIdx, setMarkedKeySliceOrigIdx] = useState<number | null>(null);
 
-  // Options de compression par série
+  // Options de compression par série (clé = seriesKey)
   const [seriesOptionsMap, setSeriesOptionsMap] = useState<Record<string, StudioSeriesBuildOptions>>({});
+  const [includedSeriesKeys, setIncludedSeriesKeys] = useState<Record<string, boolean>>({});
+  const [sortModeBySeries, setSortModeBySeries] = useState<Record<string, DicomSortMode>>({});
 
   // Coupe actuellement prévisualisée dans la série active (indice dans la série originale)
   const [previewSliceIdx, setPreviewSliceIdx] = useState<number>(0);
@@ -96,11 +101,14 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
 
   const activeSeries: ParsedDicomSeries | undefined = parsedSeriesList[activeSeriesIdx];
   const activeOptions: StudioSeriesBuildOptions | undefined = activeSeries
-    ? seriesOptionsMap[activeSeries.seriesInstanceUID]
+    ? seriesOptionsMap[activeSeries.seriesKey]
     : undefined;
 
   const initSeriesOptions = useCallback((seriesList: ParsedDicomSeries[]) => {
     const map: Record<string, StudioSeriesBuildOptions> = {};
+    const included: Record<string, boolean> = {};
+    const sortModes: Record<string, DicomSortMode> = {};
+
     seriesList.forEach((s, idx) => {
       const cleanId = `s${idx + 1}_${s.modality.toLowerCase()}_${s.description
         .toLowerCase()
@@ -108,7 +116,11 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
         .replace(/^_|_$/g, '')
         .slice(0, 18) || 'serie'}`;
 
-      map[s.seriesInstanceUID] = {
+      // Coche par défaut les vraies séries (> 2 coupes) ou la première série si l'examen n'a que des radios/scouts
+      included[s.seriesKey] = s.slices.length > 2 || idx === 0;
+      sortModes[s.seriesKey] = 'pacs_auto';
+
+      map[s.seriesKey] = {
         series: s,
         seriesId: cleanId,
         description: s.description,
@@ -124,9 +136,11 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
       };
     });
     setSeriesOptionsMap(map);
+    setIncludedSeriesKeys(included);
+    setSortModeBySeries(sortModes);
     setActiveSeriesIdx(0);
     if (seriesList.length > 0) {
-      setPreviewSliceIdx(Math.floor(seriesList[0].slices.length / 2));
+      setPreviewSliceIdx(0);
       setStudioPreviewWindow(seriesList[0].modality === 'CT' ? 'soft' : 'custom');
     }
     setLastBuiltBytes(null);
@@ -176,22 +190,61 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
     updater: (prev: StudioSeriesBuildOptions) => StudioSeriesBuildOptions
   ) => {
     if (!activeSeries) return;
-    const uid = activeSeries.seriesInstanceUID;
+    const sKey = activeSeries.seriesKey;
     setSeriesOptionsMap((prev) => {
-      const current = prev[uid];
+      const current = prev[sKey];
       if (!current) return prev;
       return {
         ...prev,
-        [uid]: updater(current),
+        [sKey]: updater(current),
       };
     });
     setLastBuiltBytes(null);
   };
 
+  const handleChangeSortMode = (mode: DicomSortMode) => {
+    if (!activeSeries) return;
+    const sKey = activeSeries.seriesKey;
+    const sortedSlices = sortSeriesSlices(activeSeries.slices, mode);
+    const updatedSeries: ParsedDicomSeries = {
+      ...activeSeries,
+      slices: sortedSlices,
+    };
+    setSortModeBySeries((prev) => ({ ...prev, [sKey]: mode }));
+    setParsedSeriesList((prev) =>
+      prev.map((s, i) => (i === activeSeriesIdx ? updatedSeries : s))
+    );
+    updateActiveOption((prev) => ({
+      ...prev,
+      series: updatedSeries,
+    }));
+  };
+
+  const handleReverseSliceOrder = () => {
+    if (!activeSeries) return;
+    const reversedSlices = [...activeSeries.slices].reverse();
+    const updatedSeries: ParsedDicomSeries = {
+      ...activeSeries,
+      slices: reversedSlices,
+    };
+    setParsedSeriesList((prev) =>
+      prev.map((s, i) => (i === activeSeriesIdx ? updatedSeries : s))
+    );
+    updateActiveOption((prev) => ({
+      ...prev,
+      series: updatedSeries,
+    }));
+  };
+
+  const selectedSeriesOptionsList = useMemo(() => {
+    const all = Object.values(seriesOptionsMap);
+    const filtered = all.filter((opt) => includedSeriesKeys[opt.series.seriesKey] !== false);
+    return filtered.length > 0 ? filtered : all.slice(0, 1);
+  }, [seriesOptionsMap, includedSeriesKeys]);
+
   // Calcul en temps réel de l'estimation de taille et du gain de compression
   const sizeEstimation = useMemo(() => {
-    const opts = Object.values(seriesOptionsMap);
-    if (opts.length === 0) {
+    if (selectedSeriesOptionsList.length === 0) {
       return {
         rawTotalBytes: 0,
         estimatedTpackBytes: 0,
@@ -200,8 +253,8 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
         totalEncodedFrames: 0,
       };
     }
-    return estimateTPackSizeBytes(opts);
-  }, [seriesOptionsMap]);
+    return estimateTPackSizeBytes(selectedSeriesOptionsList);
+  }, [selectedSeriesOptionsList]);
 
   // Géométrie recalculée de la série active
   const targetGeometry = useMemo(() => {
@@ -480,7 +533,7 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
   const handleBuildAndAction = async (
     mode: 'download' | 'open_viewer' | 'save_library'
   ) => {
-    const seriesOptions = Object.values(seriesOptionsMap);
+    const seriesOptions = selectedSeriesOptionsList;
     if (seriesOptions.length === 0) return;
 
     setIsBuilding(true);
@@ -809,26 +862,80 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
               </span>
             </div>
 
-            {parsedSeriesList.length > 1 && (
-              <div>
-                <label className="text-[11px] text-slate-400 block mb-1">Série Active</label>
-                <select
-                  value={activeSeriesIdx}
-                  onChange={(e) => {
-                    const idx = Number(e.target.value);
-                    setActiveSeriesIdx(idx);
-                    setPreviewSliceIdx(0);
-                  }}
-                  className="w-full px-2.5 py-1.5 rounded bg-slate-950 border border-slate-800 text-xs text-slate-100"
-                >
-                  {parsedSeriesList.map((s, i) => (
-                    <option key={s.seriesInstanceUID} value={i}>
-                      {s.description} ({s.slices.length} coupes)
-                    </option>
-                  ))}
-                </select>
+            {parsedSeriesList.length > 0 && (
+              <div className="space-y-2">
+                <label className="text-[11px] text-slate-400 flex items-center justify-between">
+                  <span>Séries détectées ({parsedSeriesList.length})</span>
+                  <span className="text-cyan-300">Cochez les séries à exporter</span>
+                </label>
+                <div className="max-h-36 overflow-y-auto space-y-1 pr-1">
+                  {parsedSeriesList.map((s, i) => {
+                    const isChecked = includedSeriesKeys[s.seriesKey] !== false;
+                    const isActive = activeSeriesIdx === i;
+                    return (
+                      <div
+                        key={s.seriesKey}
+                        onClick={() => {
+                          setActiveSeriesIdx(i);
+                          setPreviewSliceIdx(0);
+                        }}
+                        className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg border text-xs cursor-pointer transition ${
+                          isActive
+                            ? 'bg-cyan-500/20 border-cyan-400 text-white'
+                            : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) =>
+                              setIncludedSeriesKeys((prev) => ({
+                                ...prev,
+                                [s.seriesKey]: e.target.checked,
+                              }))
+                            }
+                            className="accent-cyan-400 shrink-0"
+                          />
+                          <span className="truncate font-medium">{s.description}</span>
+                        </div>
+                        <span className="text-[10px] font-mono text-cyan-300 shrink-0">
+                          {s.slices.length} c.
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
+
+            {/* Contrôle de l'ordre de tri des coupes + Inversion en 1 clic */}
+            <div className="space-y-1.5 pt-1 border-t border-slate-800/80">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] text-slate-400">Ordre de tri des coupes</label>
+                <button
+                  type="button"
+                  onClick={handleReverseSliceOrder}
+                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[11px] text-cyan-300 flex items-center gap-1 cursor-pointer"
+                  title="Inverser l'ordre de la pile (ex: Tête->Pieds <-> Pieds->Tête)"
+                >
+                  <ArrowUpDown className="w-3 h-3" />
+                  <span>Inverser l&apos;ordre</span>
+                </button>
+              </div>
+              <select
+                value={sortModeBySeries[activeSeries.seriesKey] || 'pacs_auto'}
+                onChange={(e) => handleChangeSortMode(e.target.value as DicomSortMode)}
+                className="w-full px-2.5 py-1.5 rounded bg-slate-950 border border-slate-800 text-xs text-slate-100"
+              >
+                <option value="pacs_auto">Auto PACS (Spatial Z + Sens InstanceNumber)</option>
+                <option value="instance_asc">Numéro d&apos;instance DICOM (0020,0013)</option>
+                <option value="spatial_desc">Position Spatiale Z (Tête → Pieds)</option>
+                <option value="spatial_asc">Position Spatiale Z (Pieds → Tête)</option>
+                <option value="filename_asc">Nom de fichier (Alpha-numérique)</option>
+              </select>
+            </div>
 
             {/* Plage de coupes Start / End */}
             <div className="grid grid-cols-2 gap-2">

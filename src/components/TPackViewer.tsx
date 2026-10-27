@@ -87,7 +87,7 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
     if (firstSeries) {
       setActiveSeriesId(firstSeries.id);
       setActiveWindowKey(firstSeries.availableWindows[0]?.key || 'default');
-      setSliceIndex(Math.floor(firstSeries.sliceCount / 2));
+      setSliceIndex(0);
       setZoom(1);
       setPan({ x: 0, y: 0 });
       setContrast(1);
@@ -151,7 +151,7 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
       if (!target) return;
       setActiveSeriesId(newSeriesId);
       setActiveWindowKey(target.availableWindows[0]?.key || 'default');
-      setSliceIndex(Math.floor(target.sliceCount / 2));
+      setSliceIndex(0);
       setZoom(1);
       setPan({ x: 0, y: 0 });
     },
