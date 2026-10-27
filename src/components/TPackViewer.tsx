@@ -54,7 +54,6 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
   // Transformation de vue (Zoom, Pan, Contraste/Luminosité post-LUT)
   const [zoom, setZoom] = useState<number>(1);
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  // contrast: 1.0 = 100%, brightness: 1.0 = 100%
   const [contrast, setContrast] = useState<number>(1.0);
   const [brightness, setBrightness] = useState<number>(1.0);
 
@@ -74,12 +73,13 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
   } | null>(null);
   const [creatingMeasureId, setCreatingMeasureId] = useState<string | null>(null);
 
-  // État des touches maintenues main gauche (W, Espace, Z)
+  // État des touches maintenues main gauche (W, Espace, Z) sur ordinateur
   const pressedKeysRef = useRef<Set<string>>(new Set());
   const [activeKeyMode, setActiveKeyMode] = useState<'none' | 'w' | 'space' | 'z'>('none');
 
-  // Accumulateur deltaY pour le Trackpad (seuil calibré = 15px)
+  // Accumulateurs pour le défilement Trackpad et le Scroll tactile à 1 doigt
   const wheelDeltaAccumulatorRef = useRef<number>(0);
+  const touchScrollAccumulatorRef = useRef<number>(0);
   const lastVibratedSliceRef = useRef<number>(-10);
 
   // Références DOM
@@ -88,19 +88,21 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
   const scrubTrackRef = useRef<HTMLDivElement | null>(null);
   const tpackInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Gestion multi-touch (Pinch-to-zoom à 2 doigts et Pan à 1 doigt au centre)
+  // Gestion multi-touch :
+  // - 1 doigt : défilement des coupes (scroll vertical) ou tracé de la règle si active
+  // - 2 doigts : déplacement de l'image (Pan) + zoom par pincement (Pinch-to-Zoom)
   const activePointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const lastPinchDistRef = useRef<number | null>(null);
+  const lastPinchMidRef = useRef<{ x: number; y: number } | null>(null);
   const lastDragPosRef = useRef<{ x: number; y: number } | null>(null);
   const isScrubbingRef = useRef<boolean>(false);
 
-  // Synchronisation lors d'un changement d'archive ou de série
+  // Synchronisation lors d'un changement d'archive
   useEffect(() => {
     const firstSeries = archive.manifest.series[0];
     if (firstSeries) {
       setActiveSeriesId(firstSeries.id);
       setActiveWindowKey(firstSeries.availableWindows[0]?.key || 'default');
-      // Positionner par défaut sur la coupe médiane (souvent porteuse de la lésion principale)
       setSliceIndex(Math.floor(firstSeries.sliceCount / 2));
       setZoom(1);
       setPan({ x: 0, y: 0 });
@@ -130,7 +132,7 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
     setBrightness(1.0);
   }, []);
 
-  // Changement de coupe sécurisé avec retour haptique toutes les 5 coupes
+  // Changement de coupe sécurisé avec retour haptique léger sur mobile
   const changeSlice = useCallback(
     (nextIndex: number, triggerHaptics: boolean = false) => {
       if (!seriesManifest) return;
@@ -184,7 +186,6 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
       } else if (key === '1' || key === '2' || key === '3') {
         if (!seriesManifest) return;
         const wins = seriesManifest.availableWindows;
-        // Convention : 1 = Os ('bone' si présent, sinon index 0), 2 = Parties Molles ('soft' si présent, sinon index 1)
         if (key === '1') {
           const boneWin = wins.find((w) => w.key === 'bone') || wins[0];
           if (boneWin) setActiveWindowKey(boneWin.key);
@@ -294,7 +295,6 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Nettoyage fond radiologique sombre #090D16
     ctx.save();
     ctx.fillStyle = '#090D16';
     ctx.fillRect(0, 0, cw, ch);
@@ -377,7 +377,7 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
     return () => ro.disconnect();
   }, []);
 
-  // Défilement Trackpad calibré (Accumulateur deltaY avec threshold = 15px)
+  // Défilement Trackpad / Molette (seuil calibré = 15px)
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     e.preventDefault();
     const THRESHOLD_PX = 15;
@@ -385,28 +385,45 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
 
     if (Math.abs(wheelDeltaAccumulatorRef.current) >= THRESHOLD_PX) {
       const steps = Math.trunc(wheelDeltaAccumulatorRef.current / THRESHOLD_PX);
-      // Limite à 1 ou 2 coupes par tick d'inertie pour un contrôle chirurgical au trackpad
       const clampedStep = Math.sign(steps) * Math.min(2, Math.abs(steps));
       wheelDeltaAccumulatorRef.current -= steps * THRESHOLD_PX;
       changeSlice(sliceIndex + clampedStep, false);
     }
   };
 
-  // Gestion Pointeur sur la Zone Centrale (Pinch 2 doigts, Pan 1 doigt, Règle mm, Raccourcis W/Espace/Z)
+  // Gestion Pointeur :
+  // - 1 doigt / clic gauche : scroll vertical à travers les coupes (ou règle en mm si active)
+  // - 2 doigts : déplacement (Pan) du point milieu + zoom par pincement (Pinch-to-Zoom)
   const handleViewportPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (isScrubbingRef.current) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
+    // Passage à 2 doigts : interrompt tout tracé de règle éventuel et initialise Pan 2 doigts + Pinch Zoom
     if (activePointersRef.current.size === 2) {
+      if (creatingMeasureId) {
+        const cancelId = creatingMeasureId;
+        setMeasurementsBySlice((prev) => ({
+          ...prev,
+          [currentSliceKey]: (prev[currentSliceKey] || []).filter((m) => m.id !== cancelId),
+        }));
+        setCreatingMeasureId(null);
+      }
+      setActiveDragHandle(null);
+
       const pts = Array.from(activePointersRef.current.values());
       lastPinchDistRef.current = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+      lastPinchMidRef.current = {
+        x: (pts[0].x + pts[1].x) / 2,
+        y: (pts[0].y + pts[1].y) / 2,
+      };
       return;
     }
 
     lastDragPosRef.current = { x: e.clientX, y: e.clientY };
+    touchScrollAccumulatorRef.current = 0;
 
-    // Si l'outil Règle est actif (et qu'aucune touche W/Space/Z n'est maintenue)
+    // Si l'outil Règle est actif (et qu'un seul doigt / pointeur est posé)
     if (
       rulerActive &&
       activeKeyMode === 'none' &&
@@ -415,9 +432,8 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
     ) {
       const imgPt = screenToImageCoords(e.clientX, e.clientY);
       const { scale } = getCanvasTransform();
-      const hitRadiusImg = 14 / Math.max(0.2, scale);
+      const hitRadiusImg = 18 / Math.max(0.2, scale);
 
-      // Vérifie si l'utilisateur saisit une extrémité existante pour l'ajuster
       for (const m of currentMeasurements) {
         if (Math.hypot(imgPt.x - m.x1, imgPt.y - m.y1) <= hitRadiusImg) {
           setActiveDragHandle({ measureId: m.id, endpoint: 'p1' });
@@ -429,7 +445,6 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
         }
       }
 
-      // Sinon, crée un nouveau segment de mesure en mm
       const newId = `m_${Date.now()}`;
       const newMeasure: MeasurementLine = {
         id: newId,
@@ -450,25 +465,46 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
     if (!activePointersRef.current.has(e.pointerId)) return;
     activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-    // 1. Pinch-to-Zoom à 2 doigts sur mobile/tablette
+    const dpr = window.devicePixelRatio || 1;
+
+    // 1. GESTE À 2 DOIGTS : Déplacement (Pan à 2 doigts) + Zoom en pinçant (Pinch-to-Zoom)
     if (activePointersRef.current.size === 2) {
       const pts = Array.from(activePointersRef.current.values());
       const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
-      if (lastPinchDistRef.current && lastPinchDistRef.current > 10) {
+      const mid = {
+        x: (pts[0].x + pts[1].x) / 2,
+        y: (pts[0].y + pts[1].y) / 2,
+      };
+
+      // Déplacement à 2 doigts (suivi du point milieu)
+      if (lastPinchMidRef.current) {
+        const dMidX = mid.x - lastPinchMidRef.current.x;
+        const dMidY = mid.y - lastPinchMidRef.current.y;
+        setPan((p) => ({
+          x: p.x + dMidX * dpr,
+          y: p.y + dMidY * dpr,
+        }));
+      }
+
+      // Zoom par pincement (Pinch-to-Zoom)
+      if (lastPinchDistRef.current && lastPinchDistRef.current > 8) {
         const ratio = dist / lastPinchDistRef.current;
         setZoom((z) => Math.max(0.4, Math.min(8, z * ratio)));
       }
+
       lastPinchDistRef.current = dist;
+      lastPinchMidRef.current = mid;
       return;
     }
 
+    // 2. GESTE À 1 DOIGT / SOURIS
     const prevPos = lastDragPosRef.current;
     if (!prevPos) return;
     const dx = e.clientX - prevPos.x;
     const dy = e.clientY - prevPos.y;
     lastDragPosRef.current = { x: e.clientX, y: e.clientY };
 
-    // 2. Ajustement d'une extrémité de la règle ou création en cours
+    // 2a. Ajustement ou tracé d'une mesure en millimètres
     if (activeDragHandle) {
       const imgPt = screenToImageCoords(e.clientX, e.clientY);
       setMeasurementsBySlice((prev) => ({
@@ -495,8 +531,7 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
       return;
     }
 
-    // 3. Raccourcis Clavier Main Gauche (W = Contraste/Luminosité, Z = Zoom, Espace / Clic milieu = Pan)
-    const dpr = window.devicePixelRatio || 1;
+    // 2b. Raccourcis Clavier Main Gauche sur ordinateur (W = Contraste, Z = Zoom, Espace / Clic milieu = Pan)
     if (activeKeyMode === 'w') {
       setContrast((c) => Math.max(0.3, Math.min(3.0, c + dx * 0.005)));
       setBrightness((b) => Math.max(0.3, Math.min(2.5, b - dy * 0.005)));
@@ -508,12 +543,25 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
       return;
     }
 
-    // RÈGLE D'OR MOBILE & LAPTOP : Le glissement au centre fait du Pan (et ne change JAMAIS de coupe)
-    if (activeKeyMode === 'space' || e.buttons === 4 || (!rulerActive && e.buttons === 1)) {
+    if (activeKeyMode === 'space' || e.buttons === 4) {
       setPan((p) => ({
         x: p.x + dx * dpr,
         y: p.y + dy * dpr,
       }));
+      return;
+    }
+
+    // 2c. Défilement des coupes en scrollant à 1 doigt sur l'image (ou glisser vertical à la souris)
+    if (!rulerActive && (e.pointerType === 'touch' || e.buttons === 1)) {
+      const SLICE_SCROLL_STEP_PX = 11;
+      touchScrollAccumulatorRef.current += dy;
+      if (Math.abs(touchScrollAccumulatorRef.current) >= SLICE_SCROLL_STEP_PX) {
+        const deltaSlices = Math.trunc(
+          touchScrollAccumulatorRef.current / SLICE_SCROLL_STEP_PX
+        );
+        touchScrollAccumulatorRef.current -= deltaSlices * SLICE_SCROLL_STEP_PX;
+        changeSlice(sliceIndex + deltaSlices, true);
+      }
     }
   };
 
@@ -521,15 +569,22 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
     activePointersRef.current.delete(e.pointerId);
     if (activePointersRef.current.size < 2) {
       lastPinchDistRef.current = null;
+      lastPinchMidRef.current = null;
     }
-    if (activePointersRef.current.size === 0) {
+    if (activePointersRef.current.size === 1) {
+      // Ré-ancrer le doigt restant pour éviter un saut de position après avoir relâché le 2e doigt
+      const remaining = Array.from(activePointersRef.current.values())[0];
+      lastDragPosRef.current = { x: remaining.x, y: remaining.y };
+      touchScrollAccumulatorRef.current = 0;
+    } else if (activePointersRef.current.size === 0) {
       lastDragPosRef.current = null;
+      touchScrollAccumulatorRef.current = 0;
     }
     setActiveDragHandle(null);
     setCreatingMeasureId(null);
   };
 
-  // Gestion de la Scrub Bar Latérale Droite (largeur 40px, hauteur 70% de l'écran, touch-action: none)
+  // Gestion de la Scrub Bar Latérale Droite (accès rapide à toute la pile)
   const updateSliceFromScrubY = (clientY: number) => {
     const track = scrubTrackRef.current;
     if (!track || !seriesManifest) return;
@@ -557,7 +612,6 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
     isScrubbingRef.current = false;
   };
 
-  // Bascule rapide entre les fenêtres disponibles (ex: Os <-> Parties Molles)
   const handleCycleWindow = () => {
     if (!seriesManifest || seriesManifest.availableWindows.length <= 1) return;
     const wins = seriesManifest.availableWindows;
@@ -570,9 +624,17 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
 
   const handleDownloadCurrentArchive = () => {
     if (!archive.rawBytes) return;
-    const blob = new Blob([archive.rawBytes.buffer.slice(archive.rawBytes.byteOffset, archive.rawBytes.byteOffset + archive.rawBytes.byteLength) as ArrayBuffer], {
-      type: 'application/octet-stream',
-    });
+    const blob = new Blob(
+      [
+        archive.rawBytes.buffer.slice(
+          archive.rawBytes.byteOffset,
+          archive.rawBytes.byteOffset + archive.rawBytes.byteLength
+        ) as ArrayBuffer,
+      ],
+      {
+        type: 'application/octet-stream',
+      }
+    );
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -614,7 +676,7 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
         }}
       />
 
-      {/* ZONE D'IMAGE CENTRALE (80%+ de l'écran) */}
+      {/* ZONE D'IMAGE CENTRALE (1 doigt = Scroll coupes, 2 doigts = Pan + Pinch Zoom) */}
       <div
         ref={viewportRef}
         onWheel={handleWheel}
@@ -631,49 +693,49 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
             ? 'cursor-ns-resize'
             : activeKeyMode === 'z'
             ? 'cursor-zoom-in'
-            : 'cursor-grab active:cursor-grabbing'
+            : 'cursor-ns-resize'
         }`}
       >
         <canvas ref={canvasRef} className="w-full h-full block" />
 
-        {/* HUD Radiologique Supérieur Gauche (Infos patient/cas & télémétrie physique) */}
+        {/* HUD Radiologique Supérieur Gauche — Compact sur Mobile */}
         {seriesManifest && (
-          <div className="absolute top-3 left-3 pointer-events-none flex flex-col gap-1 bg-slate-950/75 backdrop-blur-md border border-slate-800/80 rounded-xl px-3 py-2 text-xs font-mono shadow-lg max-w-[75vw]">
-            <div className="flex items-center gap-2">
+          <div className="absolute top-2.5 left-2.5 pointer-events-none flex flex-col gap-0.5 bg-slate-950/75 backdrop-blur-md border border-slate-800/80 rounded-xl px-2.5 py-1.5 sm:px-3 sm:py-2 text-[11px] sm:text-xs font-mono shadow-lg max-w-[62vw] sm:max-w-[70vw]">
+            <div className="flex items-center gap-1.5">
               <span className="px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-bold text-[10px]">
                 {seriesManifest.modality}
               </span>
-              <span className="font-sans font-semibold text-slate-100 truncate">
+              <span className="font-sans font-semibold text-slate-100 truncate text-xs">
                 {archive.manifest.title}
               </span>
             </div>
-            <div className="text-[11px] text-slate-400 truncate">
+            <div className="hidden sm:block text-[11px] text-slate-400 truncate">
               {seriesManifest.description} • {seriesManifest.width}×{seriesManifest.height}px
             </div>
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-cyan-300">
+            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[10px] sm:text-[11px] text-cyan-300">
               <span>
-                Coupe :{' '}
+                Coupe{' '}
                 <strong className="text-white">
-                  {sliceIndex + 1} / {seriesManifest.sliceCount}
+                  {sliceIndex + 1}/{seriesManifest.sliceCount}
                 </strong>
               </span>
-              <span>Z : {currentSliceObj?.zPosition.toFixed(1) ?? '0.0'} mm</span>
-              <span>Ép. : {seriesManifest.effectiveSliceThickness} mm</span>
-              <span>
-                Δxy : {seriesManifest.pixelSpacing[1]}×{seriesManifest.pixelSpacing[0]} mm
+              <span>Z:{currentSliceObj?.zPosition.toFixed(1) ?? '0.0'}mm</span>
+              <span className="hidden xs:inline">
+                Δxy:{seriesManifest.pixelSpacing[1]}mm
               </span>
             </div>
-            {(zoom !== 1 || contrast !== 1 || brightness !== 1) && (
+            {(zoom !== 1 || pan.x !== 0 || pan.y !== 0 || contrast !== 1 || brightness !== 1) && (
               <div className="text-[10px] text-amber-300">
-                Zoom: {zoom.toFixed(2)}× | C: {Math.round(contrast * 100)}% | L:{' '}
-                {Math.round(brightness * 100)}%
+                Zoom {zoom.toFixed(1)}×
+                {(contrast !== 1 || brightness !== 1) &&
+                  ` | C:${Math.round(contrast * 100)}% L:${Math.round(brightness * 100)}%`}
               </div>
             )}
           </div>
         )}
 
-        {/* Boutons d'actions rapides en haut à droite (Import .tpack, Aide Raccourcis, Reset) */}
-        <div className="absolute top-3 right-14 flex items-center gap-1.5 z-10">
+        {/* Boutons d'actions rapides en haut à droite */}
+        <div className="absolute top-2.5 right-12 sm:right-14 flex items-center gap-1 sm:gap-1.5 z-10">
           {currentMeasurements.length > 0 && (
             <button
               type="button"
@@ -683,18 +745,18 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
                   [currentSliceKey]: [],
                 }))
               }
-              className="px-2.5 py-1.5 rounded-lg bg-red-950/80 hover:bg-red-900/80 border border-red-500/40 text-red-200 text-xs font-medium flex items-center gap-1 shadow transition cursor-pointer"
+              className="p-1.5 sm:px-2.5 sm:py-1.5 rounded-lg bg-red-950/85 hover:bg-red-900/80 border border-red-500/40 text-red-200 text-xs font-medium flex items-center gap-1 shadow transition cursor-pointer"
               title="Effacer les mesures de cette coupe"
             >
               <Trash2 className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Effacer mesures</span>
+              <span className="hidden sm:inline">Effacer</span>
             </button>
           )}
 
           <button
             type="button"
             onClick={() => tpackInputRef.current?.click()}
-            className="px-2.5 py-1.5 rounded-lg bg-slate-900/85 hover:bg-slate-800 border border-slate-700/80 text-slate-200 text-xs font-medium flex items-center gap-1.5 shadow transition cursor-pointer"
+            className="p-1.5 sm:px-2.5 sm:py-1.5 rounded-lg bg-slate-900/85 hover:bg-slate-800 border border-slate-700/80 text-slate-200 text-xs font-medium flex items-center gap-1.5 shadow transition cursor-pointer"
             title="Ouvrir un fichier .tpack local"
           >
             <FolderUp className="w-3.5 h-3.5 text-cyan-400" />
@@ -716,7 +778,7 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
             type="button"
             onClick={resetView}
             className="p-1.5 rounded-lg bg-slate-900/85 hover:bg-slate-800 border border-slate-700/80 text-slate-300 hover:text-white shadow transition cursor-pointer"
-            title="Réinitialiser la vue (Touche R)"
+            title="Réinitialiser Zoom / Pan / Contraste (Touche R)"
           >
             <RotateCcw className="w-4 h-4" />
           </button>
@@ -724,14 +786,27 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
           <button
             type="button"
             onClick={() => setShowShortcutsModal(true)}
-            className="hidden md:flex p-1.5 rounded-lg bg-slate-900/85 hover:bg-slate-800 border border-slate-700/80 text-slate-300 hover:text-cyan-300 shadow transition cursor-pointer"
-            title="Raccourcis Clavier Main Gauche & Trackpad"
+            className="p-1.5 rounded-lg bg-slate-900/85 hover:bg-slate-800 border border-slate-700/80 text-slate-300 hover:text-cyan-300 shadow transition cursor-pointer"
+            title="Aide Gestes Tactiles & Raccourcis"
           >
             <Keyboard className="w-4 h-4" />
           </button>
         </div>
 
-        {/* SCRUB BAR LATÉRALE DROITE ("Un seul pouce" — largeur 40px, hauteur 70% de l'écran) */}
+        {/* Bandeau d'indication des gestes tactiles (discret en bas de l'image sur mobile) */}
+        <div className="sm:hidden absolute bottom-2 left-2.5 right-12 pointer-events-none flex items-center justify-center">
+          <div className="px-2.5 py-1 rounded-full bg-slate-950/75 backdrop-blur border border-slate-800/80 text-[10px] text-slate-300 flex items-center gap-2 shadow">
+            <span>
+              <strong className="text-cyan-300">1 doigt :</strong> {rulerActive ? 'Tracer règle mm' : 'Défiler coupes'}
+            </span>
+            <span className="text-slate-600">•</span>
+            <span>
+              <strong className="text-cyan-300">2 doigts :</strong> Déplacer &amp; Pincer Zoom
+            </span>
+          </div>
+        </div>
+
+        {/* SCRUB BAR LATÉRALE DROITE (largeur 36px sur mobile / 40px desktop, hauteur 68% de l'écran) */}
         <div
           ref={scrubTrackRef}
           onPointerDown={handleScrubPointerDown}
@@ -739,49 +814,41 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
           onPointerUp={handleScrubPointerUp}
           onPointerCancel={handleScrubPointerUp}
           style={{
-            width: '40px',
-            height: '70%',
             touchAction: 'none',
             overscrollBehavior: 'none',
           }}
-          className="absolute right-2 top-1/2 -translate-y-1/2 z-20 rounded-2xl bg-slate-950/85 backdrop-blur-md border border-slate-800/90 hover:border-cyan-500/50 shadow-2xl flex flex-col items-center justify-between py-3 cursor-ns-resize select-none"
-          title="Scrub Bar Tactile : glissez verticalement avec le pouce droit pour parcourir les coupes"
+          className="w-9 sm:w-10 h-[66%] sm:h-[70%] absolute right-1.5 sm:right-2 top-1/2 -translate-y-1/2 z-20 rounded-2xl bg-slate-950/85 backdrop-blur-md border border-slate-800/90 hover:border-cyan-500/50 shadow-2xl flex flex-col items-center justify-between py-2.5 cursor-ns-resize select-none"
+          title="Scrub Bar Rapide : glissez pour parcourir toute la pile"
         >
-          {/* Indicateur numérique compact en haut de la piste */}
           <div className="text-[10px] font-mono font-bold text-cyan-300 leading-none">
             {sliceIndex + 1}
           </div>
 
-          {/* Piste verticale graduée */}
-          <div className="relative flex-1 w-2 my-2 bg-slate-800/90 rounded-full overflow- visible">
-            {/* Graduations tous les 5 coupes */}
+          <div className="relative flex-1 w-1.5 sm:w-2 my-2 bg-slate-800/90 rounded-full">
             {seriesManifest &&
               Array.from({ length: Math.min(20, Math.floor(seriesManifest.sliceCount / 2)) }).map(
                 (_, idx, arr) => (
                   <div
                     key={idx}
                     style={{ top: `${(idx / Math.max(1, arr.length - 1)) * 100}%` }}
-                    className="absolute -left-1.5 w-5 h-[1px] bg-slate-700/60 pointer-events-none"
+                    className="absolute -left-1.5 w-4 sm:w-5 h-[1px] bg-slate-700/60 pointer-events-none"
                   />
                 )
               )}
 
-            {/* Remplissage de progression */}
             <div
               style={{ height: `${progressRatio * 100}%` }}
               className="w-full bg-gradient-to-b from-cyan-500/40 to-cyan-400 rounded-full transition-none"
             />
 
-            {/* Curseur pouce (Thumb) avec badge flottant */}
             <div
               style={{ top: `${progressRatio * 100}%` }}
-              className="absolute left-1/2 -translate-x-1/2 -translate-y-1/2 w-7 h-4 rounded-full bg-cyan-400 border-2 border-slate-950 shadow-lg shadow-cyan-400/40 flex items-center justify-center"
+              className="absolute left-1/2 -translate-x-1/2 -translate-y-1/2 w-6 sm:w-7 h-3.5 sm:h-4 rounded-full bg-cyan-400 border-2 border-slate-950 shadow-lg shadow-cyan-400/40 flex items-center justify-center"
             >
-              <div className="w-2.5 h-0.5 bg-slate-950 rounded-full" />
+              <div className="w-2 h-0.5 bg-slate-950 rounded-full" />
             </div>
           </div>
 
-          {/* Total de coupes en bas de la piste */}
           <div className="text-[10px] font-mono text-slate-400 leading-none">
             {seriesManifest?.sliceCount || 1}
           </div>
@@ -789,7 +856,7 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
 
         {/* Tiroir / Carte flottante d'informations du Cas Clinique */}
         {showCaseInfo && (
-          <div className="absolute bottom-4 left-4 right-16 md:right-auto md:w-96 z-30 rounded-2xl bg-slate-950/95 backdrop-blur-md border border-cyan-500/40 p-4 shadow-2xl space-y-2">
+          <div className="absolute bottom-10 sm:bottom-4 left-2.5 right-12 md:right-auto md:w-96 z-30 rounded-2xl bg-slate-950/95 backdrop-blur-md border border-cyan-500/40 p-3.5 sm:p-4 shadow-2xl space-y-2">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-cyan-400">
                 <Info className="w-4 h-4" />
@@ -803,7 +870,9 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <h3 className="text-sm font-semibold text-white">{archive.manifest.title}</h3>
+            <h3 className="text-xs sm:text-sm font-semibold text-white">
+              {archive.manifest.title}
+            </h3>
             {archive.manifest.anatomicalRegion && (
               <div className="text-xs text-cyan-300">
                 Région : {archive.manifest.anatomicalRegion}
@@ -822,16 +891,16 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
         )}
       </div>
 
-      {/* BOTTOM BAR ERGONOMIQUE (Dans les 20% inférieurs de l'écran pour le contrôle au pouce & laptop) */}
-      <div className="w-full min-h-[64px] max-h-[20vh] bg-[#0B101B] border-t border-slate-800/90 px-3 py-2 flex flex-wrap items-center justify-between gap-2 z-20">
-        {/* Sélecteur de Série */}
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1.5 bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1.5">
-            <Layers className="w-4 h-4 text-cyan-400 shrink-0" />
+      {/* BOTTOM BAR ERGONOMIQUE — Adaptée Mobile (2 lignes compactes sur téléphone, 1 ligne sur desktop) */}
+      <div className="w-full bg-[#0B101B] border-t border-slate-800/90 px-2.5 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 z-20 shrink-0">
+        {/* Ligne 1 sur Mobile : Sélecteur de Série + Bascule Rapide Fenêtres (Os / Mou) */}
+        <div className="flex items-center justify-between sm:justify-start gap-1.5 w-full sm:w-auto">
+          <div className="flex items-center gap-1.5 bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1.5 flex-1 sm:flex-initial min-w-0">
+            <Layers className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
             <select
               value={activeSeriesId}
               onChange={(e) => handleSelectSeries(e.target.value)}
-              className="bg-transparent text-xs font-medium text-slate-100 focus:outline-none max-w-[160px] sm:max-w-[240px] truncate"
+              className="bg-transparent text-xs font-medium text-slate-100 focus:outline-none w-full sm:max-w-[220px] truncate"
             >
               {seriesList.map((s) => (
                 <option key={s.id} value={s.id} className="bg-slate-950 text-slate-100">
@@ -841,23 +910,22 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
             </select>
           </div>
 
-          {/* Boutons de bascule rapide Fenêtres (Os [1] / Parties Molles [2]) */}
           {seriesManifest && seriesManifest.availableWindows.length > 1 ? (
-            <div className="flex items-center bg-slate-900 p-1 rounded-xl border border-slate-800">
+            <div className="flex items-center bg-slate-900 p-0.5 rounded-xl border border-slate-800 shrink-0">
               {seriesManifest.availableWindows.map((win, idx) => {
                 const isActive = activeWindowKey === win.key;
                 const shortLabel =
                   win.key === 'bone'
-                    ? 'Os [1]'
+                    ? 'Os'
                     : win.key === 'soft'
-                    ? 'Mou [2]'
+                    ? 'Mou'
                     : `${win.label.split(' ')[0]} [${idx + 1}]`;
                 return (
                   <button
                     key={win.key}
                     type="button"
                     onClick={() => setActiveWindowKey(win.key)}
-                    className={`px-3 py-1 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition cursor-pointer ${
                       isActive
                         ? 'bg-cyan-500 text-slate-950 shadow'
                         : 'text-slate-400 hover:text-slate-200'
@@ -872,26 +940,28 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
             <button
               type="button"
               onClick={handleCycleWindow}
-              className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-xs text-slate-300 flex items-center gap-1.5"
+              className="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-xs text-slate-300 flex items-center gap-1 shrink-0"
             >
               <SunMedium className="w-3.5 h-3.5 text-cyan-400" />
-              <span>{seriesManifest?.availableWindows[0]?.label || 'Fenêtre Standard'}</span>
+              <span className="truncate max-w-[100px]">
+                {seriesManifest?.availableWindows[0]?.label || 'Standard'}
+              </span>
             </button>
           )}
         </div>
 
-        {/* Commandes Outils Pédagogiques : Règle mm [M], Annotations [A], Infos Cas */}
-        <div className="flex items-center gap-1.5">
+        {/* Ligne 2 sur Mobile : Outils Pédagogiques (Règle mm, Annotations, Infos Cas, Reset) */}
+        <div className="grid grid-cols-3 sm:flex items-center gap-1.5 w-full sm:w-auto">
           <button
             type="button"
             onClick={() => setRulerActive((prev) => !prev)}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 border transition cursor-pointer ${
+            className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 border transition cursor-pointer ${
               rulerActive
                 ? 'bg-amber-500/20 border-amber-400 text-amber-200 shadow-sm'
                 : 'bg-slate-900 border-slate-800 text-slate-300 hover:text-white'
             }`}
           >
-            <Ruler className="w-3.5 h-3.5 text-amber-400" />
+            <Ruler className="w-3.5 h-3.5 text-amber-400 shrink-0" />
             <span>Règle mm</span>
             <kbd className="hidden md:inline-block text-[10px] px-1 bg-slate-950/80 rounded text-slate-400">
               M
@@ -901,18 +971,18 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
           <button
             type="button"
             onClick={() => setShowAnnotations((prev) => !prev)}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 border transition cursor-pointer ${
+            className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 border transition cursor-pointer ${
               showAnnotations
                 ? 'bg-cyan-500/20 border-cyan-400 text-cyan-200 shadow-sm'
                 : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
             }`}
           >
             {showAnnotations ? (
-              <Eye className="w-3.5 h-3.5 text-cyan-400" />
+              <Eye className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
             ) : (
-              <EyeOff className="w-3.5 h-3.5 text-slate-500" />
+              <EyeOff className="w-3.5 h-3.5 text-slate-500 shrink-0" />
             )}
-            <span>Annotations</span>
+            <span>Annot.</span>
             <kbd className="hidden md:inline-block text-[10px] px-1 bg-slate-950/80 rounded text-slate-400">
               A
             </kbd>
@@ -921,19 +991,19 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
           <button
             type="button"
             onClick={() => setShowCaseInfo((prev) => !prev)}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 border transition cursor-pointer ${
+            className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 border transition cursor-pointer ${
               showCaseInfo
                 ? 'bg-emerald-500/20 border-emerald-400 text-emerald-200'
                 : 'bg-slate-900 border-slate-800 text-slate-300 hover:text-white'
             }`}
           >
-            <Info className="w-3.5 h-3.5 text-emerald-400" />
-            <span className="hidden sm:inline">Infos Cas</span>
+            <Info className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            <span>Infos Cas</span>
           </button>
         </div>
       </div>
 
-      {/* Modal Raccourcis Clavier Main Gauche & Ergonomie */}
+      {/* Modal Gestes Tactiles Mobile & Raccourcis Clavier */}
       {showShortcutsModal && (
         <div
           className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
@@ -946,7 +1016,7 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2 text-sm font-bold text-cyan-400">
                 <Keyboard className="w-4 h-4" />
-                <span>Ergonomie Laptop (Main Gauche) &amp; Mobile</span>
+                <span>Gestes Tactiles Mobile &amp; Raccourcis</span>
               </div>
               <button
                 type="button"
@@ -958,6 +1028,31 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
             </div>
 
             <div className="space-y-2.5 text-xs">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-400">
+                Sur Mobile &amp; Tablette
+              </div>
+              <div className="flex items-center justify-between py-1 border-b border-slate-800/60">
+                <span className="text-slate-300">Défiler les coupes</span>
+                <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 font-mono text-cyan-300">
+                  Glisser 1 doigt (ou Scrub Bar)
+                </span>
+              </div>
+              <div className="flex items-center justify-between py-1 border-b border-slate-800/60">
+                <span className="text-slate-300">Déplacer l&apos;image (Pan)</span>
+                <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 font-mono text-cyan-300">
+                  Glisser avec 2 doigts
+                </span>
+              </div>
+              <div className="flex items-center justify-between py-1 border-b border-slate-800/60">
+                <span className="text-slate-300">Zoomer / Dézoomer</span>
+                <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 font-mono text-cyan-300">
+                  Pincer à 2 doigts
+                </span>
+              </div>
+
+              <div className="text-[11px] font-bold uppercase tracking-wider text-cyan-400 pt-2">
+                Sur Ordinateur (Trackpad &amp; Clavier)
+              </div>
               <div className="flex items-center justify-between py-1 border-b border-slate-800/60">
                 <span className="text-slate-300 flex items-center gap-1.5">
                   <SunMedium className="w-3.5 h-3.5 text-cyan-400" /> Contraste / Luminosité
@@ -982,28 +1077,10 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
                   Maintenir Z + Glisser
                 </kbd>
               </div>
-              <div className="flex items-center justify-between py-1 border-b border-slate-800/60">
-                <span className="text-slate-300">Outil Règle graduée en mm</span>
-                <kbd className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 font-mono text-amber-300">
-                  Touche M
-                </kbd>
-              </div>
-              <div className="flex items-center justify-between py-1 border-b border-slate-800/60">
-                <span className="text-slate-300">Afficher / Masquer les annotations</span>
-                <kbd className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 font-mono text-cyan-300">
-                  Touche A
-                </kbd>
-              </div>
-              <div className="flex items-center justify-between py-1 border-b border-slate-800/60">
-                <span className="text-slate-300">Basculer Fenêtres (Os / Parties Molles)</span>
-                <kbd className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 font-mono text-cyan-300">
-                  Touches 1, 2, 3
-                </kbd>
-              </div>
               <div className="flex items-center justify-between py-1">
-                <span className="text-slate-300">Réinitialiser la vue</span>
-                <kbd className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 font-mono text-cyan-300">
-                  Touche R
+                <span className="text-slate-300">Règle mm / Annotations / Fenêtres / Reset</span>
+                <kbd className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 font-mono text-amber-300">
+                  M / A / 1-2 / R
                 </kbd>
               </div>
             </div>
@@ -1070,13 +1147,13 @@ function drawViewerAnnotation(
   }
 
   if (ann.label) {
-    ctx.font = `600 ${Math.round(12 * dpr)}px Inter, system-ui, sans-serif`;
+    ctx.font = `600 ${Math.round(11 * dpr)}px Inter, system-ui, sans-serif`;
     const metrics = ctx.measureText(ann.label);
-    const padX = 7 * dpr;
-    const boxH = 20 * dpr;
+    const padX = 6 * dpr;
+    const boxH = 19 * dpr;
     const boxW = metrics.width + padX * 2;
-    const bx = x1 - boxW / 2;
-    const by = y1 - boxH - 6 * dpr;
+    const bx = Math.max(4 * dpr, Math.min(ctx.canvas.width - boxW - 4 * dpr, x1 - boxW / 2));
+    const by = Math.max(4 * dpr, y1 - boxH - 6 * dpr);
 
     ctx.fillStyle = 'rgba(9, 13, 22, 0.9)';
     ctx.fillRect(bx, by, boxW, boxH);
@@ -1113,14 +1190,12 @@ function drawMeasurementLine(
   ctx.fillStyle = '#FBBF24';
   ctx.lineWidth = 2.2 * dpr;
 
-  // Segment principal
   ctx.beginPath();
   ctx.moveTo(sx1, sy1);
   ctx.lineTo(sx2, sy2);
   ctx.stroke();
 
-  // Extrémités manipulables (cercles + croix de visée)
-  const handleRadius = 5.5 * dpr;
+  const handleRadius = 6 * dpr;
   for (const [px, py] of [
     [sx1, sy1],
     [sx2, sy2],
@@ -1132,7 +1207,6 @@ function drawMeasurementLine(
     ctx.stroke();
   }
 
-  // Étiquette en millimètres au milieu du segment
   const midX = (sx1 + sx2) / 2;
   const midY = (sy1 + sy2) / 2;
   const label = `${distMm.toFixed(1)} mm`;

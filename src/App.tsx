@@ -55,17 +55,17 @@ export const App: React.FC = () => {
   }, []);
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-[#090D16] text-slate-100 overflow-hidden select-none">
+    <div className="h-[100dvh] w-screen flex flex-col bg-[#090D16] text-slate-100 overflow-hidden select-none">
       {/* BARRE DE NAVIGATION PRINCIPALE (Console PACS Dark Mode #090D16) */}
-      <header className="h-12 shrink-0 bg-[#090D16] border-b border-slate-800/90 px-3 sm:px-5 flex items-center justify-between gap-2 z-30">
+      <header className="h-11 sm:h-12 shrink-0 bg-[#090D16] border-b border-slate-800/90 px-2.5 sm:px-5 flex items-center justify-between gap-2 z-30">
         {/* Identité Visuelle */}
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="w-8 h-8 rounded-lg bg-cyan-500/15 border border-cyan-500/40 flex items-center justify-center text-cyan-400 shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-cyan-500/15 border border-cyan-500/40 flex items-center justify-center text-cyan-400 shrink-0">
             <Activity className="w-4 h-4" />
           </div>
           <div className="truncate">
             <div className="flex items-center gap-2">
-              <span className="font-bold text-sm tracking-tight text-white">
+              <span className="font-bold text-xs sm:text-sm tracking-tight text-white">
                 TPack<span className="text-cyan-400">.pacs</span>
               </span>
               <span className="hidden md:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-[10px] font-medium text-emerald-300">
@@ -77,40 +77,40 @@ export const App: React.FC = () => {
         </div>
 
         {/* Sélecteur des 2 Modes Principaux : Lecteur Pédagogique vs Studio de Compression */}
-        <div className="flex items-center bg-slate-900/90 p-1 rounded-xl border border-slate-800">
+        <div className="flex items-center bg-slate-900/90 p-0.5 sm:p-1 rounded-xl border border-slate-800">
           <button
             type="button"
             onClick={() => setMode('viewer')}
-            className={`px-3 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+            className={`px-2.5 sm:px-3 py-1 rounded-lg text-[11px] sm:text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition cursor-pointer ${
               mode === 'viewer'
                 ? 'bg-cyan-500 text-slate-950 shadow-sm'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
             <Eye className="w-3.5 h-3.5" />
-            <span>Lecteur .tpack</span>
+            <span>Lecteur</span>
           </button>
 
           <button
             type="button"
             onClick={() => setMode('studio')}
-            className={`px-3 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+            className={`px-2.5 sm:px-3 py-1 rounded-lg text-[11px] sm:text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition cursor-pointer ${
               mode === 'studio'
                 ? 'bg-cyan-500 text-slate-950 shadow-sm'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
             <Cpu className="w-3.5 h-3.5" />
-            <span>Studio DICOM → .tpack</span>
+            <span>Studio DICOM</span>
           </button>
         </div>
 
         {/* Bouton de rechargement rapide du Fantôme de Démo */}
-        <div className="hidden sm:flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
           <button
             type="button"
             onClick={loadDemoCase}
-            className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs text-slate-300 hover:text-cyan-300 flex items-center gap-1.5 transition cursor-pointer"
+            className="p-1.5 sm:px-2.5 sm:py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs text-slate-300 hover:text-cyan-300 flex items-center gap-1.5 transition cursor-pointer"
             title="Recharger le fantôme médical procédural en mémoire vive"
           >
             <Sparkles className="w-3.5 h-3.5 text-cyan-400" />

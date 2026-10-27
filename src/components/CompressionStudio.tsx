@@ -85,6 +85,8 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
+  const studioTouchLastYRef = useRef<number | null>(null);
+  const studioTouchAccRef = useRef<number>(0);
 
   const activeSeries: ParsedDicomSeries | undefined = parsedSeriesList[activeSeriesIdx];
   const activeOptions: StudioSeriesBuildOptions | undefined = activeSeries
@@ -384,19 +386,41 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
   };
 
   const handleCanvasPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (activeTool === 'none') return;
     e.currentTarget.setPointerCapture(e.pointerId);
+    if (activeTool === 'none') {
+      studioTouchLastYRef.current = e.clientY;
+      studioTouchAccRef.current = 0;
+      return;
+    }
     const coords = getNormalizedCanvasCoords(e);
     setDragStartNorm(coords);
     setDragCurrentNorm(coords);
   };
 
   const handleCanvasPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!dragStartNorm || activeTool === 'none') return;
+    if (activeTool === 'none') {
+      if (studioTouchLastYRef.current !== null && activeSeries) {
+        const dy = e.clientY - studioTouchLastYRef.current;
+        studioTouchLastYRef.current = e.clientY;
+        studioTouchAccRef.current += dy;
+        const STEP_PX = 12;
+        if (Math.abs(studioTouchAccRef.current) >= STEP_PX) {
+          const delta = Math.trunc(studioTouchAccRef.current / STEP_PX);
+          studioTouchAccRef.current -= delta * STEP_PX;
+          setPreviewSliceIdx((prev) =>
+            Math.max(0, Math.min(activeSeries.slices.length - 1, prev + delta))
+          );
+        }
+      }
+      return;
+    }
+    if (!dragStartNorm) return;
     setDragCurrentNorm(getNormalizedCanvasCoords(e));
   };
 
   const handleCanvasPointerUp = () => {
+    studioTouchLastYRef.current = null;
+    studioTouchAccRef.current = 0;
     if (!dragStartNorm || !dragCurrentNorm || !activeOptions) {
       setDragStartNorm(null);
       setDragCurrentNorm(null);
@@ -1017,8 +1041,8 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
                   onPointerDown={handleCanvasPointerDown}
                   onPointerMove={handleCanvasPointerMove}
                   onPointerUp={handleCanvasPointerUp}
-                  className={`max-h-[62vh] max-w-full object-contain rounded-lg border shadow-2xl ${
-                    activeTool !== 'none' ? 'cursor-crosshair border-cyan-500/60' : 'border-slate-800'
+                  className={`max-h-[54vh] sm:max-h-[62vh] max-w-full object-contain rounded-lg border shadow-2xl touch-none ${
+                    activeTool !== 'none' ? 'cursor-crosshair border-cyan-500/60' : 'cursor-ns-resize border-slate-800'
                   }`}
                 />
                 {!isSliceInRetainedSet && (
