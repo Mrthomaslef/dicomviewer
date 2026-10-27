@@ -377,19 +377,109 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
     return () => ro.disconnect();
   }, []);
 
-  // Défilement Trackpad / Molette (seuil calibré = 15px)
-  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const THRESHOLD_PX = 15;
-    wheelDeltaAccumulatorRef.current += e.deltaY;
+  // Gestion native { passive: false } du Trackpad sur Ordinateur :
+  // - Pincement Trackpad (wheel avec ctrlKey=true ou WebKit gesturechange) => Zoom sur l'image visionnée centré sur le curseur, bloque le zoom de la page entière
+  // - Glissement Trackpad à 2 doigts (wheel sans ctrlKey) => Défilement précis des coupes (seuil = 15px)
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
 
-    if (Math.abs(wheelDeltaAccumulatorRef.current) >= THRESHOLD_PX) {
-      const steps = Math.trunc(wheelDeltaAccumulatorRef.current / THRESHOLD_PX);
-      const clampedStep = Math.sign(steps) * Math.min(2, Math.abs(steps));
-      wheelDeltaAccumulatorRef.current -= steps * THRESHOLD_PX;
-      changeSlice(sliceIndex + clampedStep, false);
-    }
-  };
+    const applyCursorCenteredZoom = (
+      zoomRatio: number,
+      clientX: number,
+      clientY: number
+    ) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      // Coordonnées du curseur par rapport au centre du canvas (en pixels physiques canvas)
+      const cursorOffsetX = (clientX - (rect.left + rect.width / 2)) * dpr;
+      const cursorOffsetY = (clientY - (rect.top + rect.height / 2)) * dpr;
+
+      setZoom((prevZoom) => {
+        const nextZoom = Math.max(0.4, Math.min(10, prevZoom * zoomRatio));
+        const effectiveRatio = nextZoom / prevZoom;
+        setPan((prevPan) => ({
+          x: cursorOffsetX - (cursorOffsetX - prevPan.x) * effectiveRatio,
+          y: cursorOffsetY - (cursorOffsetY - prevPan.y) * effectiveRatio,
+        }));
+        return nextZoom;
+      });
+    };
+
+    const handleNativeWheel = (e: WheelEvent) => {
+      // Bloque impérativement le zoom natif du navigateur sur toute la page
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (e.ctrlKey || e.metaKey) {
+        // Pincement Trackpad sur MacBook / PC (ctrlKey est automatiquement true lors d'un pinch trackpad)
+        const zoomFactor = Math.exp(-e.deltaY * 0.012);
+        applyCursorCenteredZoom(zoomFactor, e.clientX, e.clientY);
+        return;
+      }
+
+      // Défilement normal au Trackpad / Molette -> changement de coupe
+      const THRESHOLD_PX = 15;
+      wheelDeltaAccumulatorRef.current += e.deltaY;
+
+      if (Math.abs(wheelDeltaAccumulatorRef.current) >= THRESHOLD_PX) {
+        const steps = Math.trunc(wheelDeltaAccumulatorRef.current / THRESHOLD_PX);
+        const clampedStep = Math.sign(steps) * Math.min(2, Math.abs(steps));
+        wheelDeltaAccumulatorRef.current -= steps * THRESHOLD_PX;
+        changeSlice(sliceIndex + clampedStep, false);
+      }
+    };
+
+    // Support spécifique Safari macOS (WebKit GestureEvents) pour bloquer le zoom page et zoomer l'image
+    let lastSafariGestureScale = 1;
+    const handleGestureStart = (e: Event) => {
+      e.preventDefault();
+      const ge = e as unknown as { scale?: number };
+      lastSafariGestureScale = ge.scale || 1;
+    };
+
+    const handleGestureChange = (e: Event) => {
+      e.preventDefault();
+      const ge = e as unknown as { scale?: number; clientX?: number; clientY?: number };
+      const currentScale = ge.scale || 1;
+      if (lastSafariGestureScale > 0) {
+        const ratio = currentScale / lastSafariGestureScale;
+        const rect = viewport.getBoundingClientRect();
+        const cx = ge.clientX ?? rect.left + rect.width / 2;
+        const cy = ge.clientY ?? rect.top + rect.height / 2;
+        applyCursorCenteredZoom(ratio, cx, cy);
+      }
+      lastSafariGestureScale = currentScale;
+    };
+
+    const handleGestureEnd = (e: Event) => {
+      e.preventDefault();
+      lastSafariGestureScale = 1;
+    };
+
+    // Bloque également le pincement accidentel sur le reste de la fenêtre (barre d'outils, header)
+    const preventGlobalPagePinch = (e: WheelEvent) => {
+      if (e.ctrlKey) {
+        e.preventDefault();
+      }
+    };
+
+    viewport.addEventListener('wheel', handleNativeWheel, { passive: false });
+    viewport.addEventListener('gesturestart', handleGestureStart, { passive: false });
+    viewport.addEventListener('gesturechange', handleGestureChange, { passive: false });
+    viewport.addEventListener('gestureend', handleGestureEnd, { passive: false });
+    window.addEventListener('wheel', preventGlobalPagePinch, { passive: false });
+
+    return () => {
+      viewport.removeEventListener('wheel', handleNativeWheel);
+      viewport.removeEventListener('gesturestart', handleGestureStart);
+      viewport.removeEventListener('gesturechange', handleGestureChange);
+      viewport.removeEventListener('gestureend', handleGestureEnd);
+      window.removeEventListener('wheel', preventGlobalPagePinch);
+    };
+  }, [sliceIndex, changeSlice]);
 
   // Gestion Pointeur :
   // - 1 doigt / clic gauche : scroll vertical à travers les coupes (ou règle en mm si active)
@@ -676,10 +766,9 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
         }}
       />
 
-      {/* ZONE D'IMAGE CENTRALE (1 doigt = Scroll coupes, 2 doigts = Pan + Pinch Zoom) */}
+      {/* ZONE D'IMAGE CENTRALE (1 doigt = Scroll coupes, 2 doigts / Pinch Trackpad = Pan + Pinch Zoom sur l'image) */}
       <div
         ref={viewportRef}
-        onWheel={handleWheel}
         onPointerDown={handleViewportPointerDown}
         onPointerMove={handleViewportPointerMove}
         onPointerUp={handleViewportPointerUp}

@@ -44,6 +44,28 @@ export const App: React.FC = () => {
     loadDemoCase();
   }, [loadDemoCase]);
 
+  // Empêche le navigateur sur ordinateur (Chrome/Safari/Firefox/Edge) de zoomer sur la page entière lors d'un pincement au trackpad
+  useEffect(() => {
+    const preventPageWheelZoom = (e: WheelEvent) => {
+      if (e.ctrlKey) {
+        e.preventDefault();
+      }
+    };
+    const preventSafariGesturePageZoom = (e: Event) => {
+      e.preventDefault();
+    };
+    window.addEventListener('wheel', preventPageWheelZoom, { passive: false });
+    window.addEventListener('gesturestart', preventSafariGesturePageZoom, { passive: false });
+    window.addEventListener('gesturechange', preventSafariGesturePageZoom, { passive: false });
+    window.addEventListener('gestureend', preventSafariGesturePageZoom, { passive: false });
+    return () => {
+      window.removeEventListener('wheel', preventPageWheelZoom);
+      window.removeEventListener('gesturestart', preventSafariGesturePageZoom);
+      window.removeEventListener('gesturechange', preventSafariGesturePageZoom);
+      window.removeEventListener('gestureend', preventSafariGesturePageZoom);
+    };
+  }, []);
+
   const handleLoadNewArchive = useCallback((newArchive: LoadedTPackArchive) => {
     setLoadedArchive((prev) => {
       if (prev && prev !== newArchive) {

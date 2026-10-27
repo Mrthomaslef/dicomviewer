@@ -73,6 +73,7 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
   const [pendingLabel, setPendingLabel] = useState<string>('Lésion clé');
   const [dragStartNorm, setDragStartNorm] = useState<[number, number] | null>(null);
   const [dragCurrentNorm, setDragCurrentNorm] = useState<[number, number] | null>(null);
+  const [studioZoom, setStudioZoom] = useState<number>(1);
 
   // État d'export .tpack
   const [isBuilding, setIsBuilding] = useState<boolean>(false);
@@ -83,6 +84,7 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
   const [lastBuiltBytes, setLastBuiltBytes] = useState<Uint8Array | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const studioViewportRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const studioTouchLastYRef = useRef<number | null>(null);
@@ -535,6 +537,28 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
     }
     return (previewSliceIdx - activeOptions.startIndex) % activeOptions.step === 0;
   }, [activeOptions, previewSliceIdx]);
+
+  // Pincement Trackpad dans le Studio : zoom sur l'image prévisualisée, jamais sur la page entière
+  useEffect(() => {
+    const vp = studioViewportRef.current;
+    if (!vp) return;
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.ctrlKey || e.metaKey) {
+        const factor = Math.exp(-e.deltaY * 0.012);
+        setStudioZoom((z) => Math.max(0.5, Math.min(6, z * factor)));
+        return;
+      }
+      if (!activeSeries) return;
+      const dir = e.deltaY > 0 ? 1 : -1;
+      setPreviewSliceIdx((prev) =>
+        Math.max(0, Math.min(activeSeries.slices.length - 1, prev + dir))
+      );
+    };
+    vp.addEventListener('wheel', handleWheel, { passive: false });
+    return () => vp.removeEventListener('wheel', handleWheel);
+  }, [activeSeries]);
 
   return (
     <div className="h-full w-full flex flex-col lg:flex-row bg-[#090D16] text-slate-100 overflow-y-auto lg:overflow-hidden">
@@ -1026,16 +1050,16 @@ export const CompressionStudio: React.FC<CompressionStudioProps> = ({
 
             {/* Canvas de prévisualisation de la coupe DICOM */}
             <div
+              ref={studioViewportRef}
               className="flex-1 flex items-center justify-center p-4 relative select-none overflow-hidden"
-              onWheel={(e) => {
-                if (!activeSeries) return;
-                const dir = e.deltaY > 0 ? 1 : -1;
-                setPreviewSliceIdx((prev) =>
-                  Math.max(0, Math.min(activeSeries.slices.length - 1, prev + dir))
-                );
-              }}
             >
-              <div className="relative flex items-center justify-center max-h-full max-w-full">
+              <div
+                style={{
+                  transform: `scale(${studioZoom})`,
+                  transformOrigin: 'center center',
+                }}
+                className="relative flex items-center justify-center max-h-full max-w-full transition-transform duration-75"
+              >
                 <canvas
                   ref={canvasRef}
                   onPointerDown={handleCanvasPointerDown}
