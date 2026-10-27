@@ -1060,33 +1060,35 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
         )}
       </div>
 
-      {/* BARRE INFÉRIEURE UNIQUE & ÉPURÉE */}
-      <div className="w-full bg-[#0B101B] border-t border-slate-800/90 px-2.5 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] flex items-center justify-between gap-2 z-20 shrink-0 overflow-x-auto">
-        <div className="flex items-center gap-1.5 min-w-0">
-          {/* Séquences sous forme de boutons cliquables */}
-          {seriesList.length > 0 && (
-            <div className="flex items-center gap-1 overflow-x-auto">
-              {seriesList.map((s) => {
-                const isActive = activeSeriesId === s.id;
-                return (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onClick={() => handleSelectSeries(s.id)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition cursor-pointer shrink-0 max-w-[160px] truncate ${
-                      isActive
-                        ? 'bg-cyan-500 text-slate-950 border-cyan-400 shadow-sm'
-                        : 'bg-slate-900 border-slate-800 text-slate-300 hover:text-white hover:border-slate-700'
-                    }`}
-                    title={`${s.description} (${s.sliceCount} coupes)`}
-                  >
-                    {s.description}
-                  </button>
-                );
-              })}
-            </div>
-          )}
+      {/* BARRE DE CHOIX DES SÉQUENCES (AU-DESSUS DE LA BARRE D'OUTILS) */}
+      {seriesList.length > 0 && (
+        <div className="w-full bg-[#090D16] border-t border-slate-800/80 px-2.5 py-1.5 flex items-center gap-1.5 z-20 shrink-0 overflow-x-auto">
+          {seriesList.map((s) => {
+            const isActive = activeSeriesId === s.id;
+            const cleanSeqName =
+              s.description.replace(/^S?\d+\s*[—\-:_]\s*/i, '').trim() || s.description;
+            return (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => handleSelectSeries(s.id)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition cursor-pointer shrink-0 ${
+                  isActive
+                    ? 'bg-cyan-500 text-slate-950 border-cyan-400 shadow-sm'
+                    : 'bg-slate-900 border-slate-800 text-slate-300 hover:text-white hover:border-slate-700'
+                }`}
+                title={`${cleanSeqName} (${s.sliceCount} coupes)`}
+              >
+                {cleanSeqName}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
+      {/* BARRE D'OUTILS INFÉRIEURE */}
+      <div className="w-full bg-[#0B101B] border-t border-slate-800/90 px-2.5 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] flex items-center justify-between gap-2 z-20 shrink-0 overflow-x-auto">
+        <div className="flex items-center gap-2 min-w-0">
           {/* Switch Fenêtres (Os / Mou) s'il y a plusieurs fenêtres pré-calculées */}
           {seriesManifest && seriesManifest.availableWindows.length > 1 && (
             <div className="flex items-center bg-slate-900 p-0.5 rounded-lg border border-slate-800 shrink-0">

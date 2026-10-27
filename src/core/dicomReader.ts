@@ -916,9 +916,12 @@ export async function parseDicomFiles(
 
     const totalRawBytes = groupSlices.reduce((acc, s) => acc + s.fileSizeBytes, 0);
 
-    let label = first.seriesDescription;
-    if (first.seriesNumber > 0 && !label.startsWith(`S${first.seriesNumber}`)) {
-      label = `S${first.seriesNumber} — ${label}`;
+    // Conserve uniquement le nom de la séquence (ex: "CORO T1 DRB") sans préfixe de numéro de série
+    let label = first.seriesDescription
+      .replace(/^S?\d+\s*[—\-:_]\s*/i, '')
+      .trim();
+    if (!label) {
+      label = first.seriesDescription.trim() || `Séquence ${first.seriesNumber}`;
     }
     if (first.echoNumber > 1) {
       label += ` (Écho ${first.echoNumber})`;
