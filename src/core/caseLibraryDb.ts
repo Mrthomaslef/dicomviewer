@@ -16,6 +16,7 @@ export interface StoredPedagogicalCase {
   createdAt: string;
   byteSize: number;
   source: 'indexeddb' | 'public_catalog' | 'demo';
+  origin?: 'local' | 'drive' | 'public';
   tpackUrl?: string;
   tpackBytes?: Uint8Array;
   manifest?: PedagogicalManifest;

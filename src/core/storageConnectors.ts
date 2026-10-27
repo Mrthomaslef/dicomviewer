@@ -148,6 +148,7 @@ export async function connectAndScanLocalDirectory(
         createdAt: new Date().toISOString(),
         byteSize: uint8.byteLength,
         source: 'indexeddb',
+        origin: 'local',
         tpackBytes: uint8,
         manifest: loaded.manifest,
       };
@@ -277,6 +278,7 @@ export async function syncFromGoogleDrive(
         createdAt: new Date().toISOString(),
         byteSize: uint8.byteLength,
         source: 'indexeddb',
+        origin: 'drive',
         tpackBytes: uint8,
         manifest: loaded.manifest,
       };
