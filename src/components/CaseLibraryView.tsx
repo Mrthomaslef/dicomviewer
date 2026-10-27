@@ -9,6 +9,9 @@ import {
   RefreshCw,
   Search,
   X,
+  Eye,
+  EyeOff,
+  CheckCircle2,
 } from 'lucide-react';
 import {
   StoredPedagogicalCase,
@@ -39,6 +42,8 @@ export const CaseLibraryView: React.FC<CaseLibraryViewProps> = ({
   const [localCases, setLocalCases] = useState<StoredPedagogicalCase[]>([]);
   const [publicCases, setPublicCases] = useState<StoredPedagogicalCase[]>([]);
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [searchInAnswerOnly, setSearchInAnswerOnly] = useState<boolean>(false);
+  const [revealedAnswerCaseIds, setRevealedAnswerCaseIds] = useState<Record<string, boolean>>({});
   const [savedDirHandle, setSavedDirHandle] = useState<FileSystemDirectoryHandle | null>(null);
   const [connectedFolderName, setConnectedFolderName] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
@@ -49,6 +54,7 @@ export const CaseLibraryView: React.FC<CaseLibraryViewProps> = ({
   const [driveApiKey, setDriveApiKey] = useState<string>('');
   const [driveError, setDriveError] = useState<string | null>(null);
 
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const folderFallbackRef = useRef<HTMLInputElement | null>(null);
 
@@ -223,15 +229,45 @@ export const CaseLibraryView: React.FC<CaseLibraryViewProps> = ({
   const activeSourceCases =
     librarySource === 'local' ? localLibraryCases : driveLibraryCases;
 
+  const normalizeText = (str: string): string =>
+    str
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+
+  const getCaseAnswerText = (c: StoredPedagogicalCase): string => {
+    const parts: string[] = [];
+    if (c.diagnosis) parts.push(c.diagnosis);
+    if (c.explanation) parts.push(c.explanation);
+    if (c.manifest?.diagnosis && c.manifest.diagnosis !== c.diagnosis) {
+      parts.push(c.manifest.diagnosis);
+    }
+    if (c.manifest?.series) {
+      for (const s of c.manifest.series) {
+        for (const sl of s.slices || []) {
+          for (const ann of sl.annotations || []) {
+            if (ann.label) parts.push(ann.label);
+          }
+        }
+      }
+    }
+    return parts.join(' — ');
+  };
+
   const allCases = activeSourceCases.filter((c) => {
-    const q = searchQuery.trim().toLowerCase();
+    const q = normalizeText(searchQuery.trim());
     if (!q) return true;
-    return (
-      c.title.toLowerCase().includes(q) ||
-      c.anatomicalRegion.toLowerCase().includes(q) ||
-      c.clinicalHistory.toLowerCase().includes(q) ||
-      (c.diagnosis || '').toLowerCase().includes(q)
+    const words = q.split(/\s+/).filter(Boolean);
+    const answerText = normalizeText(getCaseAnswerText(c));
+
+    if (searchInAnswerOnly) {
+      return words.every((w) => answerText.includes(w));
+    }
+
+    const fullText = normalizeText(
+      [c.id, c.title, c.anatomicalRegion, c.clinicalHistory, getCaseAnswerText(c)].join(' ')
     );
+    return words.every((w) => fullText.includes(w));
   });
 
   return (
@@ -349,20 +385,61 @@ export const CaseLibraryView: React.FC<CaseLibraryViewProps> = ({
           </div>
         </div>
 
-        {/* Barre de recherche */}
-        <div className="relative">
-          <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder={
-              librarySource === 'local'
-                ? 'Rechercher dans votre bibliothèque locale...'
-                : 'Rechercher dans votre bibliothèque Google Drive...'
-            }
-            className="w-full pl-9 pr-3 py-2 rounded-xl bg-[#0B101B] border border-slate-800 text-xs text-slate-100 focus:border-cyan-500 focus:outline-none"
-          />
+        {/* Barre de recherche + Bouton Chercher par mot dans la réponse */}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+          <div className="relative flex-1">
+            <Search
+              className={`w-3.5 h-3.5 absolute left-3.5 top-1/2 -translate-y-1/2 ${
+                searchInAnswerOnly ? 'text-emerald-400' : 'text-slate-500'
+              }`}
+            />
+            <input
+              ref={searchInputRef}
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder={
+                searchInAnswerOnly
+                  ? 'Chercher un mot dans la réponse (diagnostic, sémiologie, annotations)...'
+                  : librarySource === 'local'
+                  ? 'Rechercher dans votre bibliothèque locale...'
+                  : 'Rechercher dans votre bibliothèque Google Drive...'
+              }
+              className={`w-full pl-9 pr-8 py-2 rounded-xl bg-[#0B101B] border text-xs text-slate-100 focus:outline-none transition ${
+                searchInAnswerOnly
+                  ? 'border-emerald-500/70 focus:border-emerald-400 bg-emerald-950/15'
+                  : 'border-slate-800 focus:border-cyan-500'
+              }`}
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-200 cursor-pointer"
+                title="Effacer la recherche"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              const next = !searchInAnswerOnly;
+              setSearchInAnswerOnly(next);
+              setTimeout(() => searchInputRef.current?.focus(), 0);
+            }}
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border transition cursor-pointer shrink-0 ${
+              searchInAnswerOnly
+                ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-sm'
+                : 'bg-[#0B101B] hover:bg-slate-900 text-emerald-300 border-slate-800 hover:border-emerald-500/40'
+            }`}
+            title="Filtrer uniquement par mot contenu dans la réponse (diagnostic, sémiologie et annotations)"
+          >
+            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+            <span>Chercher dans la réponse</span>
+          </button>
         </div>
 
         {syncStatus && (
@@ -435,69 +512,114 @@ export const CaseLibraryView: React.FC<CaseLibraryViewProps> = ({
 
         {/* Grille des Cas */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {allCases.map((c) => (
-            <div
-              key={`${c.source}_${c.id}`}
-              onClick={() => handleOpenCase(c)}
-              className="rounded-xl bg-[#0B101B] border border-slate-800 hover:border-cyan-500/40 p-4 flex flex-col justify-between gap-3 transition cursor-pointer group"
-            >
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5">
-                    <span className="px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-mono font-bold text-[10px]">
-                      {c.modality}
+          {allCases.map((c) => {
+            const answerText = getCaseAnswerText(c);
+            const isAnswerRevealed = !!revealedAnswerCaseIds[c.id];
+            return (
+              <div
+                key={`${c.source}_${c.id}`}
+                onClick={() => handleOpenCase(c)}
+                className="rounded-xl bg-[#0B101B] border border-slate-800 hover:border-cyan-500/40 p-4 flex flex-col justify-between gap-3 transition cursor-pointer group"
+              >
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <span className="px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-mono font-bold text-[10px]">
+                        {c.modality}
+                      </span>
+                      {c.anatomicalRegion && (
+                        <span className="text-xs text-slate-400">{c.anatomicalRegion}</span>
+                      )}
+                    </div>
+                    <span className="text-[11px] text-slate-500 font-mono">
+                      {(c.byteSize / 1024).toFixed(0)} Ko
                     </span>
-                    {c.anatomicalRegion && (
-                      <span className="text-xs text-slate-400">{c.anatomicalRegion}</span>
+                  </div>
+
+                  <h3 className="text-sm font-bold text-white group-hover:text-cyan-300 transition">
+                    {c.title}
+                  </h3>
+                  {c.clinicalHistory && (
+                    <p className="text-xs text-slate-400 line-clamp-2">{c.clinicalHistory}</p>
+                  )}
+
+                  {searchInAnswerOnly && searchQuery.trim() && (
+                    <div
+                      className="pt-1"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-[10px] font-semibold text-emerald-300">
+                          <CheckCircle2 className="w-3 h-3" />
+                          Mot trouvé dans la réponse
+                        </span>
+                        {answerText && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setRevealedAnswerCaseIds((prev) => ({
+                                ...prev,
+                                [c.id]: !prev[c.id],
+                              }))
+                            }
+                            className="text-[10px] text-emerald-400 hover:text-emerald-300 flex items-center gap-1 cursor-pointer"
+                          >
+                            {isAnswerRevealed ? (
+                              <>
+                                <EyeOff className="w-3 h-3" /> Masquer réponse
+                              </>
+                            ) : (
+                              <>
+                                <Eye className="w-3 h-3" /> Voir réponse
+                              </>
+                            )}
+                          </button>
+                        )}
+                      </div>
+                      {isAnswerRevealed && answerText && (
+                        <div className="mt-1.5 p-2 rounded-lg bg-emerald-950/40 border border-emerald-500/30 text-[11px] text-emerald-100 leading-snug">
+                          {answerText}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between">
+                  <span className="text-xs font-semibold text-cyan-400 flex items-center gap-1">
+                    <Play className="w-3 h-3 fill-current" /> Ouvrir
+                  </span>
+
+                  <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                    {c.tpackBytes && (
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadCase(c)}
+                        className="p-1.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-cyan-300"
+                        title="Télécharger .tpack"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+
+                    {c.source === 'indexeddb' && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await deleteCaseFromIndexedDB(c.id);
+                          await refreshAll();
+                        }}
+                        className="p-1.5 rounded bg-slate-900 hover:bg-red-950/60 text-slate-400 hover:text-red-300"
+                        title="Supprimer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
                     )}
                   </div>
-                  <span className="text-[11px] text-slate-500 font-mono">
-                    {(c.byteSize / 1024).toFixed(0)} Ko
-                  </span>
-                </div>
-
-                <h3 className="text-sm font-bold text-white group-hover:text-cyan-300 transition">
-                  {c.title}
-                </h3>
-                {c.clinicalHistory && (
-                  <p className="text-xs text-slate-400 line-clamp-2">{c.clinicalHistory}</p>
-                )}
-              </div>
-
-              <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between">
-                <span className="text-xs font-semibold text-cyan-400 flex items-center gap-1">
-                  <Play className="w-3 h-3 fill-current" /> Ouvrir
-                </span>
-
-                <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                  {c.tpackBytes && (
-                    <button
-                      type="button"
-                      onClick={() => handleDownloadCase(c)}
-                      className="p-1.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-cyan-300"
-                      title="Télécharger .tpack"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-
-                  {c.source === 'indexeddb' && (
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        await deleteCaseFromIndexedDB(c.id);
-                        await refreshAll();
-                      }}
-                      className="p-1.5 rounded bg-slate-900 hover:bg-red-950/60 text-slate-400 hover:text-red-300"
-                      title="Supprimer"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  )}
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
