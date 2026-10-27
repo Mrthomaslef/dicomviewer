@@ -1,16 +1,14 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  BookOpen,
   Play,
   Trash2,
   Upload,
   Download,
-  Code2,
-  Database,
-  Globe,
-  Check,
-  Sparkles,
-  ExternalLink,
+  FolderOpen,
+  Cloud,
+  RefreshCw,
+  Search,
+  X,
 } from 'lucide-react';
 import {
   StoredPedagogicalCase,
@@ -20,6 +18,13 @@ import {
   fetchPublicCatalogCases,
 } from '../core/caseLibraryDb';
 import { LoadedTPackArchive, loadTPackFromBuffer } from '../core/tpackLoader';
+import {
+  connectAndScanLocalDirectory,
+  getSavedDirectoryHandle,
+  loadSavedGoogleDriveConfig,
+  supportsFileSystemAccessApi,
+  syncFromGoogleDrive,
+} from '../core/storageConnectors';
 
 interface CaseLibraryViewProps {
   onOpenArchive: (archive: LoadedTPackArchive) => void;
@@ -32,66 +37,134 @@ export const CaseLibraryView: React.FC<CaseLibraryViewProps> = ({
 }) => {
   const [localCases, setLocalCases] = useState<StoredPedagogicalCase[]>([]);
   const [publicCases, setPublicCases] = useState<StoredPedagogicalCase[]>([]);
-  const [loadingId, setLoadingId] = useState<string | null>(null);
-  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [savedDirHandle, setSavedDirHandle] = useState<FileSystemDirectoryHandle | null>(null);
+  const [connectedFolderName, setConnectedFolderName] = useState<string | null>(null);
+  const [syncStatus, setSyncStatus] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+
+  const [showDriveModal, setShowDriveModal] = useState<boolean>(false);
+  const [driveFolderUrl, setDriveFolderUrl] = useState<string>('');
+  const [driveApiKey, setDriveApiKey] = useState<string>('');
+  const [driveError, setDriveError] = useState<string | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const folderFallbackRef = useRef<HTMLInputElement | null>(null);
 
   const refreshAll = useCallback(async () => {
-    const [loc, pub] = await Promise.all([
+    const [loc, pub, handle] = await Promise.all([
       listCasesFromIndexedDB(),
       fetchPublicCatalogCases(),
+      getSavedDirectoryHandle(),
     ]);
     setLocalCases(loc);
     setPublicCases(pub);
+    if (handle) {
+      setSavedDirHandle(handle);
+      setConnectedFolderName(handle.name);
+    }
   }, []);
 
   useEffect(() => {
     refreshAll();
+    const savedDrive = loadSavedGoogleDriveConfig();
+    setDriveFolderUrl(savedDrive.folderUrlOrId);
+    setDriveApiKey(savedDrive.apiKey);
   }, [refreshAll, refreshTrigger]);
 
   const handleImportTpackFiles = async (files: FileList) => {
-    for (const file of Array.from(files)) {
-      try {
-        const buffer = await file.arrayBuffer();
-        const uint8 = new Uint8Array(buffer);
-        const loaded = await loadTPackFromBuffer(uint8, true);
-        const item: StoredPedagogicalCase = {
-          id: loaded.manifest.caseId || `CAS-${Date.now()}`,
-          title: loaded.manifest.title || file.name.replace(/\.tpack$/i, ''),
-          modality: loaded.manifest.modality,
-          anatomicalRegion: loaded.manifest.anatomicalRegion || 'Général',
-          clinicalHistory: loaded.manifest.clinicalHistory || '',
-          diagnosis: loaded.manifest.diagnosis || '',
-          keySliceIndex: loaded.manifest.keySliceIndex,
-          keyWindowKey: loaded.manifest.keyWindowKey,
-          createdAt: new Date().toISOString(),
-          byteSize: uint8.byteLength,
-          source: 'indexeddb',
-          tpackBytes: uint8,
-          manifest: loaded.manifest,
-        };
-        await saveCaseToIndexedDB(item);
-      } catch {
-        // Ignorer les fichiers invalides
+    const valid = Array.from(files).filter(
+      (f) =>
+        (f.name.toLowerCase().endsWith('.tpack') || f.name.toLowerCase().endsWith('.zip')) &&
+        !f.name.startsWith('._')
+    );
+    if (valid.length === 0) return;
+
+    setIsSyncing(true);
+    try {
+      for (let i = 0; i < valid.length; i++) {
+        const file = valid[i];
+        setSyncStatus(`Import (${i + 1}/${valid.length}) : ${file.name}`);
+        try {
+          const buffer = await file.arrayBuffer();
+          const uint8 = new Uint8Array(buffer);
+          const loaded = await loadTPackFromBuffer(uint8, true);
+          const item: StoredPedagogicalCase = {
+            id: loaded.manifest.caseId || `CAS-${Date.now()}`,
+            title: loaded.manifest.title || file.name.replace(/\.tpack$/i, ''),
+            modality: loaded.manifest.modality,
+            anatomicalRegion: loaded.manifest.anatomicalRegion || '',
+            clinicalHistory: loaded.manifest.clinicalHistory || '',
+            diagnosis: loaded.manifest.diagnosis || '',
+            keySliceIndex: loaded.manifest.keySliceIndex,
+            keyWindowKey: loaded.manifest.keyWindowKey,
+            createdAt: new Date().toISOString(),
+            byteSize: uint8.byteLength,
+            source: 'indexeddb',
+            tpackBytes: uint8,
+            manifest: loaded.manifest,
+          };
+          await saveCaseToIndexedDB(item);
+        } catch {
+          // Ignorer
+        }
       }
+      await refreshAll();
+    } finally {
+      setIsSyncing(false);
+      setSyncStatus(null);
     }
-    await refreshAll();
+  };
+
+  const handleConnectLocalFolder = async (useRemembered: boolean = false) => {
+    if (!supportsFileSystemAccessApi()) {
+      folderFallbackRef.current?.click();
+      return;
+    }
+    setIsSyncing(true);
+    setSyncStatus('Lecture du dossier local...');
+    try {
+      const { folderName } = await connectAndScanLocalDirectory(
+        useRemembered ? savedDirHandle : null,
+        (cur, tot) => setSyncStatus(`Indexation (${cur}/${tot})...`)
+      );
+      setConnectedFolderName(folderName);
+      await refreshAll();
+    } catch {
+      // Annulé
+    } finally {
+      setIsSyncing(false);
+      setSyncStatus(null);
+    }
+  };
+
+  const handleSyncDrive = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setDriveError(null);
+    setIsSyncing(true);
+    try {
+      await syncFromGoogleDrive(driveFolderUrl, driveApiKey, (cur, tot, name) => {
+        setSyncStatus(`Google Drive (${cur}/${tot}) : ${name}`);
+      });
+      await refreshAll();
+      setShowDriveModal(false);
+    } catch (err) {
+      setDriveError(err instanceof Error ? err.message : 'Erreur Google Drive');
+    } finally {
+      setIsSyncing(false);
+      setSyncStatus(null);
+    }
   };
 
   const handleOpenCase = async (c: StoredPedagogicalCase) => {
-    setLoadingId(c.id);
-    try {
-      if (c.tpackBytes) {
-        const loaded = await loadTPackFromBuffer(c.tpackBytes, true);
-        onOpenArchive(loaded);
-      } else if (c.tpackUrl) {
-        const res = await fetch(c.tpackUrl);
-        const buf = await res.arrayBuffer();
-        const loaded = await loadTPackFromBuffer(buf, true);
-        onOpenArchive(loaded);
-      }
-    } finally {
-      setLoadingId(null);
+    if (c.tpackBytes) {
+      const loaded = await loadTPackFromBuffer(c.tpackBytes, true);
+      onOpenArchive(loaded);
+    } else if (c.tpackUrl) {
+      const res = await fetch(c.tpackUrl);
+      const buf = await res.arrayBuffer();
+      const loaded = await loadTPackFromBuffer(buf, true);
+      onOpenArchive(loaded);
     }
   };
 
@@ -114,161 +187,149 @@ export const CaseLibraryView: React.FC<CaseLibraryViewProps> = ({
     URL.revokeObjectURL(url);
   };
 
-  const handleCopyEmbedCode = (c: StoredPedagogicalCase) => {
-    const baseViewerUrl = 'https://mrthomaslef.github.io/dicomviewer/';
-    const caseParam = c.tpackUrl
-      ? `&caseUrl=${encodeURIComponent(c.tpackUrl)}`
-      : `&caseUrl=${encodeURIComponent(`./cases/${c.id.toLowerCase()}.tpack`)}`;
-    const snippet = `<iframe src="${baseViewerUrl}?embed=1${caseParam}" width="100%" height="640" style="border:0;border-radius:12px;" allow="fullscreen" loading="lazy"></iframe>`;
-    navigator.clipboard?.writeText(snippet);
-    setCopiedId(c.id);
-    setTimeout(() => setCopiedId(null), 2200);
-  };
-
-  const handleDeleteLocal = async (id: string) => {
-    await deleteCaseFromIndexedDB(id);
-    await refreshAll();
-  };
-
   const allCases = [
     ...localCases,
     ...publicCases.filter((p) => !localCases.some((l) => l.id === p.id)),
-  ];
+  ].filter((c) => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      c.title.toLowerCase().includes(q) ||
+      c.anatomicalRegion.toLowerCase().includes(q) ||
+      c.clinicalHistory.toLowerCase().includes(q) ||
+      (c.diagnosis || '').toLowerCase().includes(q)
+    );
+  });
 
   return (
     <div className="h-full w-full overflow-y-auto bg-[#090D16] p-4 sm:p-6 text-slate-100">
-      <div className="max-w-5xl mx-auto space-y-6">
-        {/* En-tête de la Bibliothèque Hybride */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 sm:p-5 rounded-2xl bg-[#0B101B] border border-slate-800">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2 text-cyan-400 text-xs font-bold uppercase tracking-wider">
-              <BookOpen className="w-4 h-4" />
-              <span>Bibliothèque Hybride .tpack (IndexedDB + GitHub Pages)</span>
-            </div>
-            <h1 className="text-base sm:text-lg font-bold text-white">
-              Stockage de Cas Pédagogiques &amp; Lecteur Partagé
-            </h1>
-            <p className="text-xs text-slate-400 max-w-2xl">
-              Importez ou enregistrez vos examens <code className="text-cyan-300">.tpack</code> depuis le Studio.
-              Chaque cas peut être ouvert à 60 fps ici ou intégré sur le portail dédié de Cas Cliniques via le mode{' '}
-              <code className="text-emerald-300">?embed=1</code>.
-            </p>
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        accept=".tpack,.zip"
+        className="hidden"
+        onChange={(e) => e.target.files && handleImportTpackFiles(e.target.files)}
+      />
+      <input
+        ref={folderFallbackRef}
+        type="file"
+        multiple
+        // @ts-expect-error webkitdirectory
+        webkitdirectory="true"
+        className="hidden"
+        onChange={(e) => e.target.files && handleImportTpackFiles(e.target.files)}
+      />
+
+      <div className="max-w-4xl mx-auto space-y-4">
+        {/* Barre d'outils de connexion à la base .tpack */}
+        <div className="flex flex-wrap items-center justify-between gap-2 p-3.5 rounded-xl bg-[#0B101B] border border-slate-800">
+          <div className="relative flex-1 min-w-[200px]">
+            <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Rechercher dans votre base .tpack..."
+              className="w-full pl-8 pr-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-xs text-slate-100 focus:border-cyan-500 focus:outline-none"
+            />
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept=".tpack,.zip"
-              className="hidden"
-              onChange={(e) => e.target.files && handleImportTpackFiles(e.target.files)}
-            />
+          <div className="flex flex-wrap items-center gap-1.5">
+            {savedDirHandle && (
+              <button
+                type="button"
+                onClick={() => handleConnectLocalFolder(true)}
+                disabled={isSyncing}
+                className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs text-cyan-300 flex items-center gap-1 cursor-pointer"
+                title={`Actualiser "${connectedFolderName}"`}
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                <span className="max-w-[100px] truncate">{connectedFolderName}</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => handleConnectLocalFolder(false)}
+              disabled={isSyncing}
+              className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-medium text-slate-200 flex items-center gap-1.5 cursor-pointer"
+            >
+              <FolderOpen className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Dossier Local</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowDriveModal(true)}
+              disabled={isSyncing}
+              className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-medium text-slate-200 flex items-center gap-1.5 cursor-pointer"
+            >
+              <Cloud className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Google Drive</span>
+            </button>
+
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="px-3.5 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold text-xs flex items-center gap-2 shadow-lg shadow-cyan-500/20 transition cursor-pointer"
+              className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold text-xs flex items-center gap-1.5 cursor-pointer"
             >
-              <Upload className="w-4 h-4" />
-              Importer un fichier .tpack
+              <Upload className="w-3.5 h-3.5" />
+              <span>Importer .tpack</span>
             </button>
-            <a
-              href="https://mrthomaslef.github.io/tpack-cases/"
-              target="_blank"
-              rel="noreferrer"
-              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 font-semibold text-xs flex items-center gap-1.5 transition"
-            >
-              <ExternalLink className="w-3.5 h-3.5 text-cyan-400" />
-              Site de Cas Cliniques
-            </a>
           </div>
         </div>
 
-        {/* Grille des Cas Pédagogiques */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {syncStatus && (
+          <div className="p-2.5 rounded-lg bg-cyan-950/60 border border-cyan-500/30 text-xs text-cyan-200 flex items-center gap-2">
+            <RefreshCw className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+            <span>{syncStatus}</span>
+          </div>
+        )}
+
+        {/* Grille des Cas */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {allCases.map((c) => (
             <div
               key={`${c.source}_${c.id}`}
-              className="rounded-2xl bg-[#0B101B] border border-slate-800 hover:border-cyan-500/40 p-4 flex flex-col justify-between gap-4 transition shadow-lg"
+              onClick={() => handleOpenCase(c)}
+              className="rounded-xl bg-[#0B101B] border border-slate-800 hover:border-cyan-500/40 p-4 flex flex-col justify-between gap-3 transition cursor-pointer group"
             >
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-mono font-bold text-xs">
+                  <div className="flex items-center gap-1.5">
+                    <span className="px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-mono font-bold text-[10px]">
                       {c.modality}
                     </span>
-                    <span className="text-xs text-slate-400 font-mono">{c.id}</span>
-                  </div>
-
-                  <span
-                    className={`px-2 py-0.5 rounded-full text-[10px] font-semibold flex items-center gap-1 ${
-                      c.source === 'indexeddb'
-                        ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
-                        : 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'
-                    }`}
-                  >
-                    {c.source === 'indexeddb' ? (
-                      <>
-                        <Database className="w-3 h-3" /> Stocké dans IndexedDB
-                      </>
-                    ) : (
-                      <>
-                        <Globe className="w-3 h-3" /> Catalogue Public
-                      </>
+                    {c.anatomicalRegion && (
+                      <span className="text-xs text-slate-400">{c.anatomicalRegion}</span>
                     )}
+                  </div>
+                  <span className="text-[11px] text-slate-500 font-mono">
+                    {(c.byteSize / 1024).toFixed(0)} Ko
                   </span>
                 </div>
 
-                <h3 className="text-sm font-semibold text-white">{c.title}</h3>
-                <div className="text-xs text-cyan-300/90">
-                  Région : {c.anatomicalRegion} • {(c.byteSize / 1024).toFixed(0)} Ko
-                </div>
+                <h3 className="text-sm font-bold text-white group-hover:text-cyan-300 transition">
+                  {c.title}
+                </h3>
                 {c.clinicalHistory && (
                   <p className="text-xs text-slate-400 line-clamp-2">{c.clinicalHistory}</p>
                 )}
               </div>
 
-              <div className="pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2">
-                <button
-                  type="button"
-                  disabled={loadingId === c.id}
-                  onClick={() => handleOpenCase(c)}
-                  className="px-3 py-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold text-xs flex items-center gap-1.5 transition cursor-pointer"
-                >
-                  {loadingId === c.id ? (
-                    <Sparkles className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <Play className="w-3.5 h-3.5 fill-current" />
-                  )}
-                  Ouvrir dans le Lecteur
-                </button>
+              <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between">
+                <span className="text-xs font-semibold text-cyan-400 flex items-center gap-1">
+                  <Play className="w-3 h-3 fill-current" /> Ouvrir
+                </span>
 
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => handleCopyEmbedCode(c)}
-                    className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs text-slate-300 flex items-center gap-1 transition cursor-pointer"
-                    title="Copier le code <iframe> pour intégrer ce cas avec le lecteur auto-actualisé"
-                  >
-                    {copiedId === c.id ? (
-                      <>
-                        <Check className="w-3.5 h-3.5 text-emerald-400" />
-                        <span className="text-emerald-300">Copié</span>
-                      </>
-                    ) : (
-                      <>
-                        <Code2 className="w-3.5 h-3.5 text-cyan-400" />
-                        <span>Iframe</span>
-                      </>
-                    )}
-                  </button>
-
+                <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                   {c.tpackBytes && (
                     <button
                       type="button"
                       onClick={() => handleDownloadCase(c)}
-                      className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-cyan-300 transition cursor-pointer"
-                      title="Télécharger le fichier .tpack pour le déposer dans public/cases/"
+                      className="p-1.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-cyan-300"
+                      title="Télécharger .tpack"
                     >
                       <Download className="w-3.5 h-3.5" />
                     </button>
@@ -277,9 +338,12 @@ export const CaseLibraryView: React.FC<CaseLibraryViewProps> = ({
                   {c.source === 'indexeddb' && (
                     <button
                       type="button"
-                      onClick={() => handleDeleteLocal(c.id)}
-                      className="p-1.5 rounded-lg bg-slate-900 hover:bg-red-950/60 border border-slate-800 hover:border-red-500/40 text-slate-400 hover:text-red-300 transition cursor-pointer"
-                      title="Supprimer de IndexedDB"
+                      onClick={async () => {
+                        await deleteCaseFromIndexedDB(c.id);
+                        await refreshAll();
+                      }}
+                      className="p-1.5 rounded bg-slate-900 hover:bg-red-950/60 text-slate-400 hover:text-red-300"
+                      title="Supprimer"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -290,6 +354,84 @@ export const CaseLibraryView: React.FC<CaseLibraryViewProps> = ({
           ))}
         </div>
       </div>
+
+      {/* Modal Google Drive */}
+      {showDriveModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setShowDriveModal(false)}
+        >
+          <div
+            className="bg-[#0B101B] border border-slate-800 rounded-2xl max-w-md w-full p-4 space-y-3 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-400">
+                <Cloud className="w-4 h-4" />
+                <span>Connecter un Dossier Google Drive</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDriveModal(false)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSyncDrive} className="space-y-3 text-xs">
+              <div>
+                <label className="text-slate-400 block mb-1">
+                  Lien ou ID du dossier Google Drive partagé
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={driveFolderUrl}
+                  onChange={(e) => setDriveFolderUrl(e.target.value)}
+                  placeholder="https://drive.google.com/drive/folders/..."
+                  className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-slate-100"
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-400 block mb-1">Clé API Google Drive</label>
+                <input
+                  type="password"
+                  required
+                  value={driveApiKey}
+                  onChange={(e) => setDriveApiKey(e.target.value)}
+                  placeholder="AIzaSy..."
+                  className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-slate-100 font-mono"
+                />
+              </div>
+
+              {driveError && (
+                <div className="p-2 rounded bg-red-950/70 border border-red-500/40 text-red-200 text-[11px]">
+                  {driveError}
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowDriveModal(false)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSyncing}
+                  className="px-3.5 py-1.5 rounded-lg bg-emerald-500 text-slate-950 font-semibold cursor-pointer"
+                >
+                  Synchroniser
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
