@@ -2,10 +2,7 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import {
   Eye,
   EyeOff,
-  RotateCcw,
-  FolderUp,
   SunMedium,
-  Trash2,
   Crosshair,
   PanelRightClose,
   GraduationCap,
@@ -916,43 +913,6 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
             </div>
           )}
 
-          {/* Boutons d'actions épurés en haut à droite */}
-          <div className="absolute top-2.5 right-6 sm:right-12 flex items-center gap-1 z-10">
-            {currentMeasurements.length > 0 && (
-              <button
-                type="button"
-                onClick={() =>
-                  setMeasurementsBySlice((prev) => ({
-                    ...prev,
-                    [currentSliceKey]: [],
-                  }))
-                }
-                className="p-1.5 rounded-lg bg-red-950/85 hover:bg-red-900 border border-red-500/40 text-red-200 transition cursor-pointer"
-                title="Effacer les mesures"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={() => tpackInputRef.current?.click()}
-              className="p-1.5 rounded-lg bg-slate-900/85 hover:bg-slate-800 border border-slate-700/80 text-slate-300 hover:text-cyan-300 transition cursor-pointer"
-              title="Ouvrir un fichier .tpack"
-            >
-              <FolderUp className="w-3.5 h-3.5" />
-            </button>
-
-            <button
-              type="button"
-              onClick={resetView}
-              className="p-1.5 rounded-lg bg-slate-900/85 hover:bg-slate-800 border border-slate-700/80 text-slate-300 hover:text-white transition cursor-pointer"
-              title="Réinitialiser la vue (R)"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
           {/* SCRUB BAR LATÉRALE DROITE (Plus fine et compacte sur téléphone) */}
           <div
             ref={scrubTrackRef}
@@ -1132,7 +1092,12 @@ export const TPackViewer: React.FC<TPackViewerProps> = ({
       )}
 
       {/* BARRE D'OUTILS INFÉRIEURE */}
-      <div className="w-full bg-[#0B101B] border-t border-slate-800/90 px-2.5 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] flex items-center justify-between gap-2 z-20 shrink-0 overflow-x-auto">
+      <div
+        style={{
+          paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom, 0px))',
+        }}
+        className="w-full bg-[#0B101B] border-t border-slate-800/90 px-2.5 pt-2 flex items-center justify-between gap-2 z-20 shrink-0 overflow-x-auto"
+      >
         <div className="flex items-center gap-2 min-w-0">
           {/* Switch Fenêtres (Os / Mou) s'il y a plusieurs fenêtres pré-calculées */}
           {seriesManifest && seriesManifest.availableWindows.length > 1 && (

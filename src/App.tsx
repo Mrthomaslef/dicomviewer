@@ -173,7 +173,14 @@ export const App: React.FC = () => {
   // Mode Embed plein écran (?embed=1)
   if (isEmbedMode) {
     return (
-      <div className="h-[100dvh] w-screen bg-[#090D16] text-slate-100 overflow-hidden select-none">
+      <div
+        style={{
+          paddingTop: 'env(safe-area-inset-top, 0px)',
+          paddingLeft: 'env(safe-area-inset-left, 0px)',
+          paddingRight: 'env(safe-area-inset-right, 0px)',
+        }}
+        className="h-[100dvh] w-screen bg-[#090D16] text-slate-100 overflow-hidden select-none box-border"
+      >
         {loadedArchive ? (
           <TPackViewer
             archive={loadedArchive}
@@ -192,7 +199,12 @@ export const App: React.FC = () => {
 
   return (
     <div
-      className="h-[100dvh] w-screen flex flex-col bg-[#090D16] text-slate-100 overflow-hidden select-none"
+      style={{
+        paddingTop: 'env(safe-area-inset-top, 0px)',
+        paddingLeft: 'env(safe-area-inset-left, 0px)',
+        paddingRight: 'env(safe-area-inset-right, 0px)',
+      }}
+      className="h-[100dvh] w-screen flex flex-col bg-[#090D16] text-slate-100 overflow-hidden select-none box-border"
       onDragOver={(e) => e.preventDefault()}
       onDrop={async (e) => {
         e.preventDefault();
