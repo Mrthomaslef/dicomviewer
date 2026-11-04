@@ -153,6 +153,12 @@ export const App: React.FC = () => {
     const preventPageWheelZoom = (e: WheelEvent) => {
       if (e.ctrlKey) {
         e.preventDefault();
+        return;
+      }
+      const horiz = (e.target as HTMLElement | null)?.closest?.(".overflow-x-auto") as HTMLElement | null;
+      if (horiz && horiz.scrollWidth > horiz.clientWidth && Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+        horiz.scrollLeft += e.deltaY;
+        e.preventDefault();
       }
     };
     const preventSafariGesturePageZoom = (e: Event) => {
